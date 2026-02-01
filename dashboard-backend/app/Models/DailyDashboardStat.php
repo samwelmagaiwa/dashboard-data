@@ -19,6 +19,15 @@ class DailyDashboardStat extends Model
         'new_visits',
         'followups',
         'nhif_visits',
+        'emergency',
+        // Category breakdown columns (added in 2026_02_01_135240_... migration)
+        'foreigner',
+        'public',
+        'ippm_private',
+        'ippm_credit',
+        'cost_sharing',
+        'waivers',
+        'nssf',
     ];
 
     /**

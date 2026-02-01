@@ -134,7 +134,15 @@ class SyncService
                 SUM(CASE WHEN visit_status = "P" THEN 1 ELSE 0 END) as pending,
                 SUM(CASE WHEN TRIM(visit_type) = "N" THEN 1 ELSE 0 END) as new_visits,
                 SUM(CASE WHEN TRIM(visit_type) = "F" THEN 1 ELSE 0 END) as followups,
-                SUM(CASE WHEN is_nhif = "Y" THEN 1 ELSE 0 END) as nhif_visits
+                SUM(CASE WHEN is_nhif = "Y" THEN 1 ELSE 0 END) as nhif_visits,
+                SUM(CASE WHEN pat_catg = "016" THEN 1 ELSE 0 END) as foreigner,
+                SUM(CASE WHEN pat_catg = "001" THEN 1 ELSE 0 END) as public,
+                SUM(CASE WHEN pat_catg_nm LIKE "%IPPM%PRIVATE%" THEN 1 ELSE 0 END) as ippm_private,
+                SUM(CASE WHEN pat_catg_nm LIKE "%IPPM%CREDIT%" THEN 1 ELSE 0 END) as ippm_credit,
+                SUM(CASE WHEN pat_catg_nm LIKE "%COST%SHARING%" THEN 1 ELSE 0 END) as cost_sharing,
+                SUM(CASE WHEN pat_catg_nm LIKE "%WAIVER%" THEN 1 ELSE 0 END) as waivers,
+                SUM(CASE WHEN pat_catg_nm LIKE "%NSSF%" THEN 1 ELSE 0 END) as nssf,
+                SUM(CASE WHEN dept_code = "150" THEN 1 ELSE 0 END) as emergency
             ')
             ->first();
 
@@ -147,6 +155,14 @@ class SyncService
                 'new_visits' => $stats->new_visits ?? 0,
                 'followups' => $stats->followups ?? 0,
                 'nhif_visits' => $stats->nhif_visits ?? 0,
+                'emergency' => $stats->emergency ?? 0,
+                'foreigner' => $stats->foreigner ?? 0,
+                'public' => $stats->public ?? 0,
+                'ippm_private' => $stats->ippm_private ?? 0,
+                'ippm_credit' => $stats->ippm_credit ?? 0,
+                'cost_sharing' => $stats->cost_sharing ?? 0,
+                'waivers' => $stats->waivers ?? 0,
+                'nssf' => $stats->nssf ?? 0,
             ]
         );
 
