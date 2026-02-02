@@ -48,6 +48,27 @@ class SyncController extends Controller
         ], 500);
     }
 
+    /**
+     * Trigger a background sync for a specific date (default today).
+     * Returns immediately while the job runs in the queue.
+     */
+    public function triggerSync($date = null)
+    {
+        // Handle Ymd or Y-m-d
+        if ($date && strlen($date) === 8 && is_numeric($date)) {
+            $formattedDate = \Carbon\Carbon::createFromFormat('Ymd', $date)->toDateString();
+        } else {
+            $formattedDate = $date ?: date('Y-m-d');
+        }
+
+        \App\Jobs\SyncForDateJob::dispatch($formattedDate);
+
+        return response()->json([
+            'message' => "Sync job dispatched for date {$formattedDate}",
+            'status' => 'queued'
+        ]);
+    }
+
     public function syncRange(Request $request)
     {
         $startDate = $request->query('start_date');
@@ -65,28 +86,21 @@ class SyncController extends Controller
             return response()->json(['error' => 'Range too large. Please sync max 1 year at a time.'], 400);
         }
 
-        $syncedDays = 0;
-        $errors = [];
-
-        for ($date = $start->copy(); $date->lte($end); $date->addDay()) {
-            $dateString = $date->toDateString();
-            try {
-                $result = $this->syncService->syncForDate($dateString);
-                if ($result['success']) {
-                    $syncedDays++;
-                } else {
-                    $errors[$dateString] = $result['error'];
-                }
-            } catch (\Exception $e) {
-                $errors[$dateString] = $e->getMessage();
-            }
+        try {
+            // Use the optimized parallel sync service
+            $result = $this->syncService->syncDateRange($start->toDateString(), $end->toDateString());
+            
+            return response()->json([
+                'message' => "Sync completed for range $startDate to $endDate",
+                'synced_days' => $result['total_synced_days'],
+                'errors' => $result['errors']
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Sync failed',
+                'details' => $e->getMessage()
+            ], 500);
         }
-
-        return response()->json([
-            'message' => "Sync completed for range $startDate to $endDate",
-            'synced_days' => $syncedDays,
-            'errors' => $errors
-        ]);
     }
 
     /**

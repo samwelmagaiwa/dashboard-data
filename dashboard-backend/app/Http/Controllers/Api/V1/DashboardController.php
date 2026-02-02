@@ -59,7 +59,7 @@ class DashboardController extends Controller
         }
 
 
-        // Aggregate ALL stats from daily_dashboard_stats (fast, range-safe)
+        // Aggregate ALL stats from daily_dashboard_stats (fast, volume-based)
         $baseStats = DailyDashboardStat::whereDate('stat_date', '>=', $startDate)
             ->whereDate('stat_date', '<=', $endDate)
             ->selectRaw('
@@ -76,7 +76,7 @@ class DashboardController extends Controller
                 SUM(cost_sharing) as cost_sharing,
                 SUM(waivers) as waivers,
                 SUM(nssf) as nssf,
-                SUM(emergency) as emergency
+                SUM(emergency) as emergency_visits
             ')
             ->first();
 
@@ -94,12 +94,14 @@ class DashboardController extends Controller
                 'is_fully_aggregated' => $aggregatedDays >= $expectedDays,
             ],
             'total_visits' => (int)($baseStats->total_visits ?? 0),
+            'total_patients' => (int)($baseStats->total_visits ?? 0), // Count all appearances
             'consulted' => (int)($baseStats->consulted ?? 0),
             'pending' => (int)($baseStats->pending ?? 0),
             'new_visits' => (int)($baseStats->new_visits ?? 0),
             'followups' => (int)($baseStats->followups ?? 0),
             'nhif_visits' => (int)($baseStats->nhif_visits ?? 0),
-            'emergency' => (int)($baseStats->emergency ?? 0),
+            'emergency' => (int)($baseStats->emergency_visits ?? 0),
+            'emergency_patients' => (int)($baseStats->emergency_visits ?? 0), // Count all appearances
             'categories' => [
                 'foreigner' => (int)($baseStats->foreigner ?? 0),
                 'public' => (int)($baseStats->public ?? 0),

@@ -4,24 +4,44 @@ use App\Http\Controllers\Api\V1\SyncController;
 use App\Http\Controllers\Api\V1\DashboardController;
 use Illuminate\Support\Facades\Route;
 
+use App\Http\Controllers\Api\V1\AuthController;
+
 /*
 |--------------------------------------------------------------------------
 | V1 API Routes
 |--------------------------------------------------------------------------
 */
 
-Route::prefix('sync')->group(function () {
-    Route::get('/range', [SyncController::class, 'syncRange']);
-    // Queue a background sync for a range (remote API -> DB). Suitable for large ranges like full years.
-    Route::get('/enqueue/range', [SyncController::class, 'enqueueSyncRange']);
-    Route::get('/batch/{id}', [SyncController::class, 'batchStatus']);
+// Public Auth Routes
+Route::post('/login', [AuthController::class, 'login']);
 
-    // Rebuild aggregated tables from already-synced `visits` (no external API calls)
-    Route::get('/reaggregate/range', [SyncController::class, 'reaggregateRange']);
-    Route::get('/{date?}', [SyncController::class, 'sync']);
-});
-
+// Public Dashboard Routes (No Authentication Required)
 Route::prefix('dashboard')->group(function () {
     Route::get('/stats', [DashboardController::class, 'getStats']);
     Route::get('/clinics', [DashboardController::class, 'getClinicBreakdown']);
+});
+
+// Public Sync Routes (No Authentication Required)
+Route::prefix('sync')->group(function () {
+    Route::get('/range', [SyncController::class, 'syncRange']);
+    Route::get('/enqueue/range', [SyncController::class, 'enqueueSyncRange']);
+    Route::get('/batch/{id}', [SyncController::class, 'batchStatus']);
+    Route::get('/reaggregate/range', [SyncController::class, 'reaggregateRange']);
+    Route::get('/trigger/{date?}', [SyncController::class, 'triggerSync']);
+    Route::get('/{date?}', [SyncController::class, 'sync']);
+});
+
+// Protected Routes (Authentication Required)
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/me', [AuthController::class, 'me']);
+    Route::post('/logout', [AuthController::class, 'logout']);
+
+    // Reports
+    Route::get('/reports/pending', [ReportsController::class, 'pending']);
+
+    // Profile Routes
+    Route::prefix('profile')->group(function () {
+        Route::get('/', [\App\Http\Controllers\Api\V1\ProfileController::class, 'show']);
+        Route::put('/', [\App\Http\Controllers\Api\V1\ProfileController::class, 'update']);
+    });
 });
