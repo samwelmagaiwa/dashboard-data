@@ -33,6 +33,7 @@ class Visit extends Model
         'nhi_yn',
         'pat_catg_nm',
         'status',
+        'gender',
     ];
 
     /**

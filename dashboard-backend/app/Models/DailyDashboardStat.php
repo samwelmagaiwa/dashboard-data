@@ -26,7 +26,6 @@ class DailyDashboardStat extends Model
         'ippm_private',
         'ippm_credit',
         'cost_sharing',
-        'waivers',
         'nssf',
     ];
 

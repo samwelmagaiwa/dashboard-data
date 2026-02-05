@@ -6,14 +6,22 @@ use App\Models\Visit;
 use App\Models\SyncLog;
 use App\Models\DailyDashboardStat;
 use App\Models\ClinicStat;
+use App\Models\Clinic;
+use App\Models\Department;
+use App\Models\Doctor;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 
 class SyncService
 {
+    protected static $cachedClinics = [];
+    protected static $cachedDepts = [];
+    protected static $cachedDoctors = [];
     /**
-     * Sync data for a specific date (Y-m-d)
+     * Unified sync for a specific date (Y-m-d)
+     * Wrapped in transaction for integrity.
      */
     public function syncForDate($date)
     {
@@ -32,15 +40,22 @@ class SyncService
             $username = env('DASHBOARD_API_USERNAME');
             $password = env('DASHBOARD_API_PASSWORD');
 
-            $response = Http::withBasicAuth($username, $password)->timeout(60)->get($url);
+            $response = Http::withBasicAuth($username, $password)
+                ->connectTimeout(10)
+                ->timeout(60)
+                ->retry(2, 500)
+                ->get($url);
 
             if ($response->successful()) {
                 $data = $response->json();
                 $visits = $data['data'] ?? [];
                 
-                // Use the optimized bulk upsert method
-                $syncedCount = $this->bulkUpsertVisits($visits);
-                $this->updateAggregatedStats($date);
+                // Use a single transaction for the whole date sync
+                $syncedCount = DB::transaction(function () use ($visits, $date) {
+                    $count = $this->bulkUpsertVisits($visits);
+                    $this->updateAggregatedStats($date);
+                    return $count;
+                });
 
                 $syncLog->update([
                     'status' => 'SUCCESS',
@@ -59,6 +74,7 @@ class SyncService
             return ['success' => false, 'error' => "API error: " . $response->status()];
 
         } catch (\Exception $e) {
+            Log::error("Sync failed for date {$date}: " . $e->getMessage());
             $syncLog->update([
                 'status' => 'FAILED',
                 'error_message' => $e->getMessage(),
@@ -69,7 +85,15 @@ class SyncService
     }
 
     /**
-     * Sync a range of dates in parallel batches to optimize speed.
+     * Alias for backward compatibility in jobs
+     */
+    public function syncForDateOptimized($date)
+    {
+        return $this->syncForDate($date);
+    }
+
+    /**
+     * Sync a range of dates in parallel batches.
      */
     public function syncDateRange($startDate, $endDate)
     {
@@ -86,8 +110,8 @@ class SyncService
             'errors' => []
         ];
 
-        // Process in chunks of 5 to avoid overwhelming the server or memory
-        $chunks = array_chunk($dates, 5);
+        // Process in chunks of 20 parallel requests (Optimized for speed)
+        $chunks = array_chunk($dates, 20);
         $username = env('DASHBOARD_API_USERNAME');
         $password = env('DASHBOARD_API_PASSWORD');
 
@@ -97,13 +121,16 @@ class SyncService
                 foreach ($chunk as $date) {
                     $dateYmd = Carbon::parse($date)->format('Ymd');
                     $url = "http://192.168.235.250/labsms/swagger/dashboard/{$dateYmd}";
-                    $reqs[] = $pool->as($date)->withBasicAuth($username, $password)->timeout(60)->get($url);
+                    $reqs[] = $pool->as($date)
+                        ->withBasicAuth($username, $password)
+                        ->connectTimeout(10)
+                        ->timeout(60)
+                        ->get($url);
                 }
                 return $reqs;
             });
 
             foreach ($responses as $date => $response) {
-                // Determine status and log immediately
                 $syncLog = SyncLog::create([
                     'sync_type' => 'visits',
                     'sync_date' => $date,
@@ -126,7 +153,12 @@ class SyncService
                     try {
                         $data = $response->json();
                         $visits = $data['data'] ?? [];
-                        $count = $this->processVisits($visits, $date);
+                        
+                        $count = DB::transaction(function () use ($visits, $date) {
+                            $c = $this->bulkUpsertVisits($visits);
+                            $this->updateAggregatedStats($date);
+                            return $c;
+                        });
                         
                         $syncLog->update([
                             'status' => 'SUCCESS',
@@ -157,78 +189,8 @@ class SyncService
     }
 
     /**
-     * Process visits array and update DB
+     * Strictly validate and aggregate visits locally before dashboard view.
      */
-    private function processVisits($visits, $date)
-    {
-        $syncedCount = 0;
-
-        DB::transaction(function () use ($visits, $date, &$syncedCount) {
-            foreach ($visits as $visitData) {
-                $cleanData = collect($visitData)->map(function ($value) {
-                    $trimmed = is_string($value) ? trim($value) : $value;
-                    return $trimmed === '' ? null : $trimmed;
-                })->all();
-
-                // Update Master Tables
-                if (!empty($cleanData['clinicCode'])) {
-                    \App\Models\Clinic::updateOrCreate(
-                        ['clinic_code' => $cleanData['clinicCode']],
-                        ['clinic_name' => $cleanData['clinicName']]
-                    );
-                }
-
-                if (!empty($cleanData['deptCode'])) {
-                    \App\Models\Department::updateOrCreate(
-                        ['dept_code' => $cleanData['deptCode']],
-                        ['dept_name' => $cleanData['deptName']]
-                    );
-                }
-
-                if (!empty($cleanData['doctCode'])) {
-                    \App\Models\Doctor::updateOrCreate(
-                        ['doctor_code' => $cleanData['doctCode']]
-                    );
-                }
-
-                Visit::updateOrCreate(
-                    [
-                        'mr_number' => $cleanData['mrNumber'],
-                        'visit_num' => $cleanData['visitNum'],
-                        'visit_date' => $cleanData['visitDate'],
-                        'clinic_code' => $cleanData['clinicCode'],
-                    ],
-                    [
-                        'visit_type' => $cleanData['visitType'],
-                        'doct_code' => $cleanData['doctCode'] ?? null,
-                        'cons_time' => $cleanData['consTime'] ?? null,
-                        'cons_no' => $cleanData['consNo'] ?? null,
-                        'clinic_code' => $cleanData['clinicCode'],
-                        'clinic_name' => $cleanData['clinicName'],
-                        'cons_doctor' => $cleanData['consDoctor'] ?? null,
-                        'visit_status' => $cleanData['visitStatus'],
-                        'accomp_code' => $cleanData['accompCode'] ?? null,
-                        'doct_cons_dt' => $cleanData['doctConsDt'] ?? null,
-                        'doct_cons_tm' => $cleanData['doctConsTm'] ?? null,
-                        'dept_code' => $cleanData['deptCode'],
-                        'dept_name' => $cleanData['deptName'],
-                        'pat_catg' => $cleanData['patCatg'] ?? null,
-                        'ref_hosp' => $cleanData['refHosp'] ?? null,
-                        'nhi_yn' => $cleanData['nhiYn'] ?? null,
-                        'pat_catg_nm' => $cleanData['patCatgNm'] ?? null,
-                        'status' => $cleanData['status'] ?? 'A',
-                        'is_nhif' => (stripos($cleanData['patCatgNm'] ?? '', 'NHIF') !== false) ? 'Y' : 'N',
-                    ]
-                );
-                $syncedCount++;
-            }
-        });
-
-        $this->updateAggregatedStats($date);
-        
-        return $syncedCount;
-    }
-
     public function updateAggregatedStats($date)
     {
         $stats = Visit::whereDate('visit_date', $date)
@@ -244,7 +206,6 @@ class SyncService
                 SUM(CASE WHEN pat_catg_nm LIKE "%IPPM%PRIVATE%" THEN 1 ELSE 0 END) as ippm_private,
                 SUM(CASE WHEN pat_catg_nm LIKE "%IPPM%CREDIT%" THEN 1 ELSE 0 END) as ippm_credit,
                 SUM(CASE WHEN pat_catg_nm LIKE "%COST%SHARING%" THEN 1 ELSE 0 END) as cost_sharing,
-                SUM(CASE WHEN pat_catg_nm LIKE "%WAIVER%" THEN 1 ELSE 0 END) as waivers,
                 SUM(CASE WHEN pat_catg_nm LIKE "%NSSF%" THEN 1 ELSE 0 END) as nssf,
                 SUM(CASE WHEN dept_code = "150" THEN 1 ELSE 0 END) as emergency
             ')
@@ -253,20 +214,19 @@ class SyncService
         DailyDashboardStat::updateOrCreate(
             ['stat_date' => $date],
             [
-                'total_visits' => $stats->total_visits ?? 0,
-                'consulted' => $stats->consulted ?? 0,
-                'pending' => $stats->pending ?? 0,
-                'new_visits' => $stats->new_visits ?? 0,
-                'followups' => $stats->followups ?? 0,
-                'nhif_visits' => $stats->nhif_visits ?? 0,
-                'emergency' => $stats->emergency ?? 0,
-                'foreigner' => $stats->foreigner ?? 0,
-                'public' => $stats->public ?? 0,
-                'ippm_private' => $stats->ippm_private ?? 0,
-                'ippm_credit' => $stats->ippm_credit ?? 0,
-                'cost_sharing' => $stats->cost_sharing ?? 0,
-                'waivers' => $stats->waivers ?? 0,
-                'nssf' => $stats->nssf ?? 0,
+                'total_visits' => (int)($stats->total_visits ?? 0),
+                'consulted' => (int)($stats->consulted ?? 0),
+                'pending' => (int)($stats->pending ?? 0),
+                'new_visits' => (int)($stats->new_visits ?? 0),
+                'followups' => (int)($stats->followups ?? 0),
+                'nhif_visits' => (int)($stats->nhif_visits ?? 0),
+                'emergency' => (int)($stats->emergency ?? 0),
+                'foreigner' => (int)($stats->foreigner ?? 0),
+                'public' => (int)($stats->public ?? 0),
+                'ippm_private' => (int)($stats->ippm_private ?? 0),
+                'ippm_credit' => (int)($stats->ippm_credit ?? 0),
+                'cost_sharing' => (int)($stats->cost_sharing ?? 0),
+                'nssf' => (int)($stats->nssf ?? 0),
             ]
         );
 
@@ -282,73 +242,28 @@ class SyncService
                     'clinic_code' => $item->clinic_code
                 ],
                 [
-                    'clinic_name' => $item->clinic_name,
-                    'total_visits' => $item->total_visits
+                    'clinic_name' => $item->clinic_name ?: 'Unknown Clinic',
+                    'total_visits' => (int)$item->total_visits
                 ]
             );
         }
-    }
-
-    /**
-     * Optimized sync for a single date using bulk upserts.
-     * Called by SyncForDateJob.
-     */
-    public function syncForDateOptimized($date)
-    {
-        $dateYmd = Carbon::parse($date)->format('Ymd');
-        $url = "http://192.168.235.250/labsms/swagger/dashboard/{$dateYmd}";
         
-        $syncLog = SyncLog::create([
-            'sync_type' => 'visits_optimized',
-            'sync_date' => $date,
-            'status' => 'PROCESSING',
-            'records_synced' => 0,
-            'started_at' => now(),
-        ]);
-
-        try {
-            $username = env('DASHBOARD_API_USERNAME');
-            $password = env('DASHBOARD_API_PASSWORD');
-
-            $response = Http::withBasicAuth($username, $password)->timeout(120)->get($url);
-
-            if ($response->successful()) {
-                $data = $response->json();
-                $visits = $data['data'] ?? [];
-                
-                $syncedCount = $this->bulkUpsertVisits($visits);
-
-                $this->updateAggregatedStats($date);
-
-                $syncLog->update([
-                    'status' => 'SUCCESS',
-                    'records_synced' => $syncedCount,
-                    'finished_at' => now(),
-                ]);
-
-                return ['success' => true, 'count' => $syncedCount];
-            }
-
-            $syncLog->update([
-                'status' => 'FAILED',
-                'error_message' => "API error: " . $response->status(),
-                'finished_at' => now(),
-            ]);
-            return ['success' => false, 'error' => "API error: " . $response->status()];
-
-        } catch (\Exception $e) {
-            $syncLog->update([
-                'status' => 'FAILED',
-                'error_message' => $e->getMessage(),
-                'finished_at' => now(),
-            ]);
-            throw $e; // Re-throw to fail the job so it can be retried
-        }
+        // Clear dashboard cache if it exists (assuming tags or simple key)
+        \Illuminate\Support\Facades\Cache::forget("dashboard_stats_{$date}");
+        
+        // Also clear comparison stats caches that might involve this date
+        // Since comp_stats keys include ranges, we might need to be smarter or just clear broad keys if possible
+        // Ideally we would use tags, but file cache doesn't support tags consistently. 
+        // For now, let's try to clear the specific day's comparison if it was requested as a single day
+        \Illuminate\Support\Facades\Cache::forget("comp_stats_{$date}_{$date}");
+        
+        // If the user views ranges, those keys (comp_stats_START_END) won't be cleared easily without tags.
+        // We can suggest clearing all 'comp_stats*' if the driver supported it, but it doesn't.
+        // For the specific "today" view which often uses start=today&end=today, the above line fixes it.
     }
 
     /**
-     * Bulk upsert visits using database bulk operations.
-     * much faster than looping updateOrCreate.
+     * Bulk upsert visits with strict field cleaning.
      */
     private function bulkUpsertVisits(array $visits)
     {
@@ -363,40 +278,44 @@ class SyncService
         $now = now();
 
         foreach ($visits as $visitData) {
+            // Trim and validate all incoming fields
             $cleanData = collect($visitData)->map(function ($value) {
-                return is_string($value) ? trim($value) : $value;
+                if (is_string($value)) {
+                    $v = trim($value);
+                    return $v === '' ? null : $v;
+                }
+                return $value;
             })->all();
-            
-            foreach ($cleanData as $k => $v) {
-                if ($v === '') $cleanData[$k] = null;
-            }
 
-            // Format dates locally because upsert bypasses Model mutators
-            // API sends YYYYMMDD, DB needs YYYY-MM-DD
-            $visitDate = $cleanData['visitDate'];
-            if ($visitDate && strlen($visitDate) === 8 && is_numeric($visitDate)) {
-                 $visitDate = \Carbon\Carbon::createFromFormat('Ymd', $visitDate)->toDateString();
+            $visitDateOrig = $cleanData['visitDate'] ?? null;
+            if (!$visitDateOrig) continue; // Essential field
+
+            // Format dates
+            $visitDate = $visitDateOrig;
+            if (strlen($visitDate) === 8 && is_numeric($visitDate)) {
+                 $visitDate = Carbon::createFromFormat('Ymd', $visitDate)->toDateString();
             }
 
             $doctConsDt = $cleanData['doctConsDt'] ?? null;
             if ($doctConsDt && strlen($doctConsDt) === 8 && is_numeric($doctConsDt)) {
-                 $doctConsDt = \Carbon\Carbon::createFromFormat('Ymd', $doctConsDt)->toDateString();
+                 $doctConsDt = Carbon::createFromFormat('Ymd', $doctConsDt)->toDateString();
             }
 
-            // Handle N/Y mapping for is_nhif
+            // Category logic
             $patCatgNm = $cleanData['patCatgNm'] ?? '';
             $isNhif = (stripos($patCatgNm, 'NHIF') !== false) ? 'Y' : 'N';
 
+            // Master data prep
             if (!empty($cleanData['clinicCode'])) {
                 $clinics[$cleanData['clinicCode']] = [
                     'clinic_code' => $cleanData['clinicCode'],
-                    'clinic_name' => $cleanData['clinicName']
+                    'clinic_name' => $cleanData['clinicName'] ?: 'Unknown Clinic'
                 ];
             }
             if (!empty($cleanData['deptCode'])) {
                 $departments[$cleanData['deptCode']] = [
                     'dept_code' => $cleanData['deptCode'],
-                    'dept_name' => $cleanData['deptName']
+                    'dept_name' => $cleanData['deptName'] ?: 'Unknown Dept'
                 ];
             }
             if (!empty($cleanData['doctCode'])) {
@@ -408,54 +327,65 @@ class SyncService
             $preparedVisits[] = [
                 'mr_number' => $cleanData['mrNumber'],
                 'visit_num' => $cleanData['visitNum'],
-                'visit_date' => $visitDate, // Use formatted date
-                'visit_type' => $cleanData['visitType'],
+                'visit_date' => $visitDate,
+                'visit_type' => substr($cleanData['visitType'] ?? 'N', 0, 1),
                 'doct_code' => $cleanData['doctCode'] ?? null,
                 'cons_time' => $cleanData['consTime'] ?? null,
                 'cons_no' => $cleanData['consNo'] ?? null,
                 'clinic_code' => $cleanData['clinicCode'],
-                'clinic_name' => $cleanData['clinicName'],
+                'clinic_name' => $cleanData['clinicName'] ?: 'Unknown Clinic',
                 'cons_doctor' => $cleanData['consDoctor'] ?? null,
-                'visit_status' => $cleanData['visitStatus'],
+                'visit_status' => substr($cleanData['visitStatus'] ?? 'P', 0, 1),
                 'accomp_code' => $cleanData['accompCode'] ?? null,
-                'doct_cons_dt' => $doctConsDt, // Use formatted date
+                'doct_cons_dt' => $doctConsDt,
                 'doct_cons_tm' => $cleanData['doctConsTm'] ?? null,
                 'dept_code' => $cleanData['deptCode'],
-                'dept_name' => $cleanData['deptName'],
+                'dept_name' => $cleanData['deptName'] ?: 'Unknown Dept',
                 'pat_catg' => $cleanData['patCatg'] ?? null,
                 'ref_hosp' => $cleanData['refHosp'] ?? null,
-                'nhi_yn' => $cleanData['nhiYn'] ?? null,
+                'nhi_yn' => substr($cleanData['nhiYn'] ?? 'N', 0, 1),
                 'pat_catg_nm' => $patCatgNm,
-                'status' => $cleanData['status'] ?? 'A',
+                'status' => substr($cleanData['status'] ?? 'A', 0, 1),
                 'is_nhif' => $isNhif,
+                'gender' => isset($cleanData['patSex']) ? substr($cleanData['patSex'], 0, 1) : null,
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
         }
 
-        if (!empty($clinics)) {
-            \App\Models\Clinic::upsert(array_values($clinics), ['clinic_code'], ['clinic_name']);
-        }
-        if (!empty($departments)) {
-            \App\Models\Department::upsert(array_values($departments), ['dept_code'], ['dept_name']);
-        }
-        if (!empty($doctors)) {
-            \App\Models\Doctor::upsert(array_values($doctors), ['doctor_code'], ['doctor_code']);
-        }
+        // Master upserts - Filter out already cached items in this session
+    $newClinics = array_diff_key($clinics, self::$cachedClinics);
+    if (!empty($newClinics)) {
+        Clinic::upsert(array_values($newClinics), ['clinic_code'], ['clinic_name']);
+        self::$cachedClinics += $newClinics;
+    }
 
-        foreach (array_chunk($preparedVisits, 1000) as $chunk) {
-            Visit::upsert(
-                $chunk,
-                ['mr_number', 'visit_num', 'visit_date', 'clinic_code'],
-                [
-                    'visit_type', 'doct_code', 'cons_time', 'cons_no', 'clinic_code', 
-                    'clinic_name', 'cons_doctor', 'visit_status', 'accomp_code', 
-                    'doct_cons_dt', 'doct_cons_tm', 'dept_code', 'dept_name', 
-                    'pat_catg', 'ref_hosp', 'nhi_yn', 'pat_catg_nm', 'status', 
-                    'is_nhif', 'updated_at'
-                ]
-            );
-        }
+    $newDepts = array_diff_key($departments, self::$cachedDepts);
+    if (!empty($newDepts)) {
+        Department::upsert(array_values($newDepts), ['dept_code'], ['dept_name']);
+        self::$cachedDepts += $newDepts;
+    }
+
+    $newDoctors = array_diff_key($doctors, self::$cachedDoctors);
+    if (!empty($newDoctors)) {
+        Doctor::upsert(array_values($newDoctors), ['doctor_code'], ['doctor_code']);
+        self::$cachedDoctors += $newDoctors;
+    }
+
+    // Visits upsert in chunks - Ensure we use the exact unique keys from migration
+    foreach (array_chunk($preparedVisits, 1000) as $chunk) {
+        Visit::upsert(
+            $chunk,
+            ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code'], // Matches visits_encounter_unique
+            [
+                'visit_type', 'doct_code', 'cons_time', 'cons_no', 
+                'clinic_name', 'cons_doctor', 'visit_status', 'accomp_code', 
+                'doct_cons_dt', 'doct_cons_tm', 'dept_name', 
+                'pat_catg', 'ref_hosp', 'nhi_yn', 'pat_catg_nm', 'status', 
+                'is_nhif', 'gender', 'updated_at'
+            ]
+        );
+    }
 
         return count($preparedVisits);
     }

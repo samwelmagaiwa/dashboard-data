@@ -19,6 +19,9 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::prefix('dashboard')->group(function () {
     Route::get('/stats', [DashboardController::class, 'getStats']);
     Route::get('/clinics', [DashboardController::class, 'getClinicBreakdown']);
+    Route::get('/gaps', [DashboardController::class, 'getGaps']);
+    Route::get('/pie-stats', [DashboardController::class, 'getPieStats']);
+    Route::get('/chart-stats', [DashboardController::class, 'getComparisonStats']);
 });
 
 // Public Sync Routes (No Authentication Required)

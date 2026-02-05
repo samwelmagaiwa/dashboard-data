@@ -10,16 +10,16 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
-class SyncForDateJob implements ShouldQueue
+class SyncBatchJob implements ShouldQueue
 {
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $date;
-    public $timeout = 600; // 10 minutes per job to be safe
+    public $dates;
+    public $timeout = 900; // 15 minutes for 5 dates
 
-    public function __construct($date)
+    public function __construct(array $dates)
     {
-        $this->date = $date;
+        $this->dates = $dates;
         $this->onQueue('default');
     }
 
@@ -29,10 +29,10 @@ class SyncForDateJob implements ShouldQueue
             return;
         }
 
-        $result = $syncService->syncForDateOptimized($this->date);
+        // Process these specific dates in parallel
+        $result = $syncService->syncDateRange(min($this->dates), max($this->dates));
         
-        if (!$result['success']) {
-            throw new \Exception($result['error'] ?? 'Sync failed');
-        }
+        // Note: syncDateRange already handles individual successes/failures
+        // We consider the job successful if it finished processing the chunk
     }
 }

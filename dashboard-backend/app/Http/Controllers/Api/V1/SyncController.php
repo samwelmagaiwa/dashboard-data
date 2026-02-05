@@ -165,9 +165,14 @@ class SyncController extends Controller
             return response()->json(['error' => 'Range too large. Please enqueue max 1 year at a time.'], 400);
         }
 
-        $jobs = [];
+        $dates = [];
         for ($date = $start->copy(); $date->lte($end); $date->addDay()) {
-            $jobs[] = new \App\Jobs\SyncForDateJob($date->toDateString());
+            $dates[] = $date->toDateString();
+        }
+
+        $jobs = [];
+        foreach (array_chunk($dates, 5) as $chunk) {
+            $jobs[] = new \App\Jobs\SyncBatchJob($chunk);
         }
 
         $batch = Bus::batch($jobs)
@@ -175,7 +180,7 @@ class SyncController extends Controller
             ->dispatch();
 
         return response()->json([
-            'message' => "Sync enqueued for range $startDate to $endDate",
+            'message' => "Sync enqueued for range $startDate to $endDate (Chunked)",
             'batch_id' => $batch->id,
             'total_jobs' => $batch->totalJobs,
         ], 202);
