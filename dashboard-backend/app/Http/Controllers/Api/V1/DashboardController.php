@@ -38,8 +38,10 @@ class DashboardController extends Controller
         }
 
         $cacheKey = "dashboard_stats_{$startDate}_{$endDate}";
+        $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
+        $ttl = $isToday ? 60 : 600; // 1 minute for today, 10 minutes for historical
         
-        return Cache::remember($cacheKey, 600, function() use ($startDate, $endDate) {
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
             $baseStats = DailyDashboardStat::whereDate('stat_date', '>=', $startDate)
                 ->whereDate('stat_date', '<=', $endDate)
                 ->selectRaw('
@@ -110,8 +112,10 @@ class DashboardController extends Controller
         }
 
         $cacheKey = "clinic_breakdown_{$startDate}_{$endDate}";
+        $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
+        $ttl = $isToday ? 60 : 600;
 
-        return Cache::remember($cacheKey, 600, function() use ($startDate, $endDate) {
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
             $start = Carbon::parse($startDate);
             $end = Carbon::parse($endDate);
             $days = $start->diffInDays($end) + 1;
@@ -163,6 +167,7 @@ class DashboardController extends Controller
                 $breakdown[] = [
                     'clinic_name' => $clinicName,
                     'total_visits' => $cur,
+                    'previous_visits' => $prev,
                     'trend' => $trend,
                     'interpretation' => $interpretation,
                     'comparison_dates' => $compLabel,
@@ -206,8 +211,10 @@ class DashboardController extends Controller
         }
 
         $cacheKey = "pie_stats_{$startDate}_{$endDate}";
+        $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
+        $ttl = $isToday ? 60 : 600;
 
-        return Cache::remember($cacheKey, 600, function() use ($startDate, $endDate) {
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
             // 1. Gender Distribution
             // Since API doesn't return 'patSex' yet, this will mostly be 0/null for now.
             // We count 'M' and 'F' specifically.
@@ -286,8 +293,10 @@ class DashboardController extends Controller
         }
 
         $cacheKey = "comp_stats_{$startDate}_{$endDate}";
+        $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
+        $ttl = $isToday ? 60 : 600;
 
-        return Cache::remember($cacheKey, 600, function() use ($startDate, $endDate) {
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
             $start = Carbon::parse($startDate);
             $end = Carbon::parse($endDate);
             $days = $start->diffInDays($end) + 1;
@@ -343,5 +352,224 @@ class DashboardController extends Controller
                 ]
             ];
         });
+    }
+
+    /**
+     * Get aggregate service trends for the grouped bar chart.
+     */
+    public function getServiceTrends(Request $request)
+    {
+        $period = $request->query('period', 'day');
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
+
+        if (!$startDate || !$endDate) {
+            $startDate = date('Y-m-d');
+            $endDate = $startDate;
+        }
+
+        $start = Carbon::parse($startDate);
+        $end = Carbon::parse($endDate);
+
+        // Expand range based on period to show "context" trends
+        switch ($period) {
+            case 'day':
+                // Show full week (Mon-Sun) containing the startDate
+                $startDate = $start->copy()->startOfWeek(Carbon::MONDAY)->toDateString();
+                $endDate = $start->copy()->endOfWeek(Carbon::SUNDAY)->toDateString();
+                break;
+            case 'week':
+                // Show full month
+                $startDate = $start->copy()->startOfMonth()->toDateString();
+                $endDate = $start->copy()->endOfMonth()->toDateString();
+                break;
+            case 'month':
+                // Show full year
+                $startDate = $start->copy()->startOfYear()->toDateString();
+                $endDate = $start->copy()->endOfYear()->toDateString();
+                break;
+            case 'range':
+                // Use the provided range as is
+                break;
+        }
+
+        $start = Carbon::parse($startDate);
+        $end = Carbon::parse($endDate);
+
+        $cacheKey = "service_trends_{$period}_{$startDate}_{$endDate}_v5";
+        $isToday = ($endDate === date('Y-m-d'));
+        $ttl = $isToday ? 60 : 3600;
+
+        return Cache::remember($cacheKey, $ttl, function() use ($period, $startDate, $endDate, $start, $end) {
+            $labels = [];
+            $dataMap = [];
+
+            // 1. Generate empty containers for the full range
+            switch ($period) {
+                case 'day':
+                    for ($i = 0; $i < 7; $i++) {
+                        $d = $start->copy()->addDays($i);
+                        $label = $d->format('l');
+                        $labels[] = $label;
+                        $dataMap[$d->toDateString()] = [
+                            'label' => $label,
+                            'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
+                            'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                        ];
+                    }
+                    break;
+                case 'range':
+                    $tempStart = $start->copy();
+                    while ($tempStart <= $end) {
+                        $label = $tempStart->format('d M');
+                        $labels[] = $label;
+                        $dataMap[$tempStart->toDateString()] = [
+                            'label' => $label,
+                            'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
+                            'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                        ];
+                        $tempStart->addDay();
+                        if (count($labels) > 31) break;
+                    }
+                    break;
+                case 'week':
+                    $tempStart = $start->copy();
+                    while ($tempStart <= $end) {
+                        $label = "Week " . $tempStart->weekOfMonth . " (" . $tempStart->format('M') . ")";
+                        $labels[] = $label;
+                        $key = $tempStart->format('Y-W'); // Year and Week number
+                        $dataMap[$key] = [
+                            'label' => $label,
+                            'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
+                            'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                        ];
+                        $tempStart->addWeek();
+                    }
+                    break;
+                case 'month':
+                    for ($i = 1; $i <= 12; $i++) {
+                        $d = Carbon::create($start->year, $i, 1);
+                        $label = $d->format('M');
+                        $labels[] = $label;
+                        $dataMap[$d->format('Y-m')] = [
+                            'label' => $label,
+                            'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
+                            'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                        ];
+                    }
+                    break;
+                case 'year':
+                    for ($i = -4; $i <= 0; $i++) {
+                        $d = $start->copy()->addYears($i);
+                        $label = $d->year;
+                        $labels[] = $label;
+                        $dataMap[$label] = [
+                            'label' => $label,
+                            'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
+                            'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                        ];
+                    }
+                    break;
+            }
+
+            // 2. Fetch data
+            $query = DailyDashboardStat::whereDate('stat_date', '>=', $startDate)
+                ->whereDate('stat_date', '<=', $endDate);
+
+            switch ($period) {
+                case 'day':
+                case 'range':
+                    $query->selectRaw('DATE(stat_date) as group_key');
+                    break;
+                case 'week':
+                    $query->selectRaw('DATE_FORMAT(stat_date, "%Y-%u") as group_key'); // Year-WeekNumber
+                    break;
+                case 'month':
+                    $query->selectRaw('DATE_FORMAT(stat_date, "%Y-%m") as group_key');
+                    break;
+                case 'year':
+                    $query->selectRaw('YEAR(stat_date) as group_key');
+                    break;
+            }
+
+            $results = $query->selectRaw('
+                SUM(total_visits) as opd,
+                SUM(emergency) as emergency,
+                SUM(consulted) as consulted,
+                (SUM(total_visits) - SUM(consulted)) as not_consulted,
+                SUM(new_visits) as new_visits,
+                SUM(followups) as followups
+            ')
+            ->groupBy('group_key')
+            ->get();
+
+            // 3. Map results into the pre-filled dataMap
+            foreach ($results as $row) {
+                $gk = (string)$row->group_key;
+                if (isset($dataMap[$gk])) {
+                    $dataMap[$gk]['opd'] = (int)$row->opd;
+                    $dataMap[$gk]['emergency'] = (int)$row->emergency;
+                    $dataMap[$gk]['consulted'] = (int)$row->consulted;
+                    $dataMap[$gk]['not_consulted'] = (int)$row->not_consulted;
+                    $dataMap[$gk]['new_visits'] = (int)$row->new_visits;
+                    $dataMap[$gk]['followups'] = (int)$row->followups;
+                }
+            }
+
+            // 4. Transform into Chart.js format
+            $orderedData = collect(array_values($dataMap));
+
+            return [
+                'labels' => $labels,
+                'datasets' => [
+                    [
+                        'label' => 'Total OPD',
+                        'data' => $orderedData->pluck('opd'),
+                    ],
+                    [
+                        'label' => 'Emergency',
+                        'data' => $orderedData->pluck('emergency'),
+                    ],
+                    [
+                        'label' => 'Consulted',
+                        'data' => $orderedData->pluck('consulted'),
+                    ],
+                    [
+                        'label' => 'Not Consulted',
+                        'data' => $orderedData->pluck('not_consulted'),
+                    ],
+                    [
+                        'label' => 'New Visits',
+                        'data' => $orderedData->pluck('new_visits'),
+                    ],
+                    [
+                        'label' => 'Follow-ups',
+                        'data' => $orderedData->pluck('followups'),
+                    ]
+                ]
+            ];
+        });
+    }
+
+    /**
+     * Lightweight check to see if data has changed.
+     */
+    public function checkUpdates(Request $request)
+    {
+        $today = date('Y-m-d');
+        
+        // Get the latest timestamp from either daily stats or clinic stats
+        $latestStat = DailyDashboardStat::select('updated_at')->orderByDesc('updated_at')->first();
+        $latestClinic = ClinicStat::select('updated_at')->orderByDesc('updated_at')->first();
+        
+        $version = md5(
+            ($latestStat ? $latestStat->updated_at->toDateTimeString() : 'none') . 
+            ($latestClinic ? $latestClinic->updated_at->toDateTimeString() : 'none')
+        );
+
+        return response()->json([
+            'version' => $version,
+            'timestamp' => now()->toDateTimeString(),
+        ]);
     }
 }

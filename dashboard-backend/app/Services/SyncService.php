@@ -248,18 +248,22 @@ class SyncService
             );
         }
         
-        // Clear dashboard cache if it exists (assuming tags or simple key)
-        \Illuminate\Support\Facades\Cache::forget("dashboard_stats_{$date}");
-        
-        // Also clear comparison stats caches that might involve this date
-        // Since comp_stats keys include ranges, we might need to be smarter or just clear broad keys if possible
-        // Ideally we would use tags, but file cache doesn't support tags consistently. 
-        // For now, let's try to clear the specific day's comparison if it was requested as a single day
-        \Illuminate\Support\Facades\Cache::forget("comp_stats_{$date}_{$date}");
-        
-        // If the user views ranges, those keys (comp_stats_START_END) won't be cleared easily without tags.
-        // We can suggest clearing all 'comp_stats*' if the driver supported it, but it doesn't.
-        // For the specific "today" view which often uses start=today&end=today, the above line fixes it.
+        // Clear dashboard caches for this specific date
+        $cacheKeys = [
+            "dashboard_stats_{$date}_{$date}",
+            "clinic_breakdown_{$date}_{$date}",
+            "pie_stats_{$date}_{$date}",
+            "comp_stats_{$date}_{$date}",
+            // Also clear deprecated single-date keys just in case
+            "dashboard_stats_{$date}",
+            "clinic_breakdown_{$date}",
+            "pie_stats_{$date}",
+            "comp_stats_{$date}",
+        ];
+
+        foreach ($cacheKeys as $key) {
+            \Illuminate\Support\Facades\Cache::forget($key);
+        }
     }
 
     /**

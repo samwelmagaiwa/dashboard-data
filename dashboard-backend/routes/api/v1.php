@@ -22,6 +22,8 @@ Route::prefix('dashboard')->group(function () {
     Route::get('/gaps', [DashboardController::class, 'getGaps']);
     Route::get('/pie-stats', [DashboardController::class, 'getPieStats']);
     Route::get('/chart-stats', [DashboardController::class, 'getComparisonStats']);
+    Route::get('/check-updates', [DashboardController::class, 'checkUpdates']);
+    Route::get('/service-trends', [DashboardController::class, 'getServiceTrends']);
 });
 
 // Public Sync Routes (No Authentication Required)
