@@ -30,6 +30,7 @@ class Visit extends Model
         'dept_name',
         'pat_catg',
         'ref_hosp',
+        'ref_hosp_nm',
         'nhi_yn',
         'pat_catg_nm',
         'status',

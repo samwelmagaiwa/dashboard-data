@@ -5,14 +5,22 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\DailyDashboardStat;
 use App\Models\ClinicStat;
+use App\Models\Visit;
 use App\Services\SyncService;
 use App\Services\GapDetectionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
+    /**
+     * Cache version - increment this when cache structure changes.
+     * This invalidates all dashboard caches without manual key updates.
+     */
+    private const CACHE_VERSION = 1;
+
     protected $syncService;
     protected $gapService;
 
@@ -20,6 +28,14 @@ class DashboardController extends Controller
     {
         $this->syncService = $syncService;
         $this->gapService = $gapService;
+    }
+
+    /**
+     * Generate a versioned cache key.
+     */
+    private function cacheKey(string $prefix, string ...$parts): string
+    {
+        return $prefix . '_' . implode('_', $parts) . '_v' . self::CACHE_VERSION;
     }
 
     /**
@@ -37,7 +53,7 @@ class DashboardController extends Controller
             $endDate = $startDate;
         }
 
-        $cacheKey = "dashboard_stats_{$startDate}_{$endDate}";
+        $cacheKey = $this->cacheKey('dashboard_stats', $startDate, $endDate);
         $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
         $ttl = $isToday ? 60 : 600; // 1 minute for today, 10 minutes for historical
         
@@ -111,7 +127,7 @@ class DashboardController extends Controller
             $endDate = $startDate;
         }
 
-        $cacheKey = "clinic_breakdown_{$startDate}_{$endDate}";
+        $cacheKey = $this->cacheKey('clinic_breakdown', $startDate, $endDate);
         $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
@@ -210,7 +226,7 @@ class DashboardController extends Controller
             $endDate = $startDate;
         }
 
-        $cacheKey = "pie_stats_{$startDate}_{$endDate}";
+        $cacheKey = $this->cacheKey('pie_stats', $startDate, $endDate);
         $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
@@ -292,7 +308,7 @@ class DashboardController extends Controller
             $endDate = $startDate;
         }
 
-        $cacheKey = "comp_stats_{$startDate}_{$endDate}";
+        $cacheKey = $this->cacheKey('comp_stats', $startDate, $endDate);
         $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
@@ -356,12 +372,14 @@ class DashboardController extends Controller
 
     /**
      * Get aggregate service trends for the grouped bar chart.
+     * Now dynamically respects the exact date range to match cards data.
      */
     public function getServiceTrends(Request $request)
     {
         $period = $request->query('period', 'day');
         $startDate = $request->query('start_date');
         $endDate = $request->query('end_date');
+        $breakdown = $request->query('breakdown', null); // 'monthly' for monthly breakdown
 
         if (!$startDate || !$endDate) {
             $startDate = date('Y-m-d');
@@ -371,51 +389,63 @@ class DashboardController extends Controller
         $start = Carbon::parse($startDate);
         $end = Carbon::parse($endDate);
 
-        // Expand range based on period to show "context" trends
-        switch ($period) {
-            case 'day':
-                // Show full week (Mon-Sun) containing the startDate
-                $startDate = $start->copy()->startOfWeek(Carbon::MONDAY)->toDateString();
-                $endDate = $start->copy()->endOfWeek(Carbon::SUNDAY)->toDateString();
-                break;
-            case 'week':
-                // Show full month
-                $startDate = $start->copy()->startOfMonth()->toDateString();
-                $endDate = $start->copy()->endOfMonth()->toDateString();
-                break;
-            case 'month':
-                // Show full year
-                $startDate = $start->copy()->startOfYear()->toDateString();
-                $endDate = $start->copy()->endOfYear()->toDateString();
-                break;
-            case 'range':
-                // Use the provided range as is
-                break;
-        }
+        // Use the exact range provided - no expansion
+        // This ensures bars match cards data exactly
 
-        $start = Carbon::parse($startDate);
-        $end = Carbon::parse($endDate);
+        $cacheKey = $this->cacheKey('service_trends', $period, $startDate, $endDate, $breakdown ?? 'default');
+        $now = date('Y-m-d');
+        // Reduced cache TTL for more responsive data updates
+        $includesToday = ($startDate <= $now && $endDate >= $now);
+        $ttl = $includesToday ? 30 : 300; // 30 seconds for today, 5 minutes otherwise
 
-        $cacheKey = "service_trends_{$period}_{$startDate}_{$endDate}_v5";
-        $isToday = ($endDate === date('Y-m-d'));
-        $ttl = $isToday ? 60 : 3600;
-
-        return Cache::remember($cacheKey, $ttl, function() use ($period, $startDate, $endDate, $start, $end) {
+        return Cache::remember($cacheKey, $ttl, function() use ($period, $startDate, $endDate, $start, $end, $breakdown) {
             $labels = [];
             $dataMap = [];
+            $days = $start->diffInDays($end) + 1;
 
-            // 1. Generate empty containers for the full range
-            switch ($period) {
-                case 'day':
-                    for ($i = 0; $i < 7; $i++) {
-                        $d = $start->copy()->addDays($i);
-                        $label = $d->format('l');
+            // If breakdown=monthly is enabled, override period handling
+            $effectivePeriod = $breakdown === 'monthly' ? 'monthly_breakdown' : $period;
+
+            // 1. Generate empty containers dynamically based on exact range
+            switch ($effectivePeriod) {
+                case 'monthly_breakdown':
+                    // Monthly breakdown: show data grouped by month
+                    $tempStart = $start->copy()->startOfMonth();
+                    while ($tempStart <= $end) {
+                        $label = $tempStart->format('M Y');
+                        $key = $tempStart->format('Y-m');
                         $labels[] = $label;
-                        $dataMap[$d->toDateString()] = [
+                        $dataMap[$key] = [
                             'label' => $label,
                             'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
                             'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
                         ];
+                        $tempStart->addMonth();
+                    }
+                    break;
+                case 'day':
+                    // Single day: show just that day
+                    if ($days === 1) {
+                        $label = $start->format('l') . ' - ' . $start->format('d M Y');
+                        $labels[] = $label;
+                        $dataMap[$start->toDateString()] = [
+                            'label' => $label,
+                            'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
+                            'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                        ];
+                    } else {
+                        // Multiple days: iterate through range
+                        $tempStart = $start->copy();
+                        while ($tempStart <= $end) {
+                            $label = $tempStart->format('l') . ' - ' . $tempStart->format('d M Y');
+                            $labels[] = $label;
+                            $dataMap[$tempStart->toDateString()] = [
+                                'label' => $label,
+                                'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
+                                'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                            ];
+                            $tempStart->addDay();
+                        }
                     }
                     break;
                 case 'range':
@@ -433,38 +463,45 @@ class DashboardController extends Controller
                     }
                     break;
                 case 'week':
-                    $tempStart = $start->copy();
-                    while ($tempStart <= $end) {
-                        $label = "Week " . $tempStart->weekOfMonth . " (" . $tempStart->format('M') . ")";
-                        $labels[] = $label;
-                        $key = $tempStart->format('Y-W'); // Year and Week number
-                        $dataMap[$key] = [
-                            'label' => $label,
-                            'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
-                            'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
-                        ];
+                    // Iterate through actual weeks in range
+                    $tempStart = $start->copy()->startOfWeek(Carbon::MONDAY);
+                    $tempEnd = $end->copy()->endOfWeek(Carbon::SUNDAY);
+                    $seenWeeks = [];
+                    while ($tempStart <= $tempEnd) {
+                        $key = $tempStart->format('Y-W');
+                        if (!isset($seenWeeks[$key])) {
+                            $label = "Week " . $tempStart->weekOfMonth . " (" . $tempStart->format('M') . ")";
+                            $labels[] = $label;
+                            $dataMap[$key] = [
+                                'label' => $label,
+                                'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
+                                'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                            ];
+                            $seenWeeks[$key] = true;
+                        }
                         $tempStart->addWeek();
                     }
                     break;
                 case 'month':
-                    for ($i = 1; $i <= 12; $i++) {
-                        $d = Carbon::create($start->year, $i, 1);
-                        $label = $d->format('M');
-                        $labels[] = $label;
-                        $dataMap[$d->format('Y-m')] = [
+                    // Iterate through actual months in range
+                    $tempStart = $start->copy()->startOfMonth();
+                    while ($tempStart <= $end) {
+                        $label = $tempStart->format('M Y');
+                        $dataMap[$tempStart->format('Y-m')] = [
                             'label' => $label,
                             'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
                             'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
                         ];
+                        $labels[] = $label;
+                        $tempStart->addMonth();
                     }
                     break;
                 case 'year':
-                    for ($i = -4; $i <= 0; $i++) {
-                        $d = $start->copy()->addYears($i);
-                        $label = $d->year;
-                        $labels[] = $label;
-                        $dataMap[$label] = [
-                            'label' => $label,
+                    // Iterate through actual years in range
+                    for ($y = $start->year; $y <= $end->year; $y++) {
+                        $labels[] = (string)$y;
+                        $dataMap[$y] = [
+                            'label' => (string)$y,
                             'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
                             'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
                         ];
@@ -476,7 +513,10 @@ class DashboardController extends Controller
             $query = DailyDashboardStat::whereDate('stat_date', '>=', $startDate)
                 ->whereDate('stat_date', '<=', $endDate);
 
-            switch ($period) {
+            switch ($effectivePeriod) {
+                case 'monthly_breakdown':
+                    $query->selectRaw('DATE_FORMAT(stat_date, "%Y-%m") as group_key');
+                    break;
                 case 'day':
                 case 'range':
                     $query->selectRaw('DATE(stat_date) as group_key');
@@ -552,24 +592,77 @@ class DashboardController extends Controller
     }
 
     /**
+     * Get detailed referral hospital distribution.
+     */
+    public function getReferralStats(Request $request)
+    {
+        $startDate = $request->query('start_date', date('Y-m-d'));
+        $endDate = $request->query('end_date', date('Y-m-d'));
+
+        $cacheKey = $this->cacheKey('referral_stats', $startDate, $endDate);
+        $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
+        // Reduced cache TTL for more responsive data updates
+        $ttl = $isToday ? 30 : 300; // 30 seconds for today, 5 minutes otherwise
+
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
+            return Visit::whereBetween('visit_date', [$startDate, $endDate])
+                ->whereNotNull('ref_hosp')
+                ->where('ref_hosp', '!=', '')
+                ->select('ref_hosp as code', 'ref_hosp_nm as name', DB::raw('COUNT(*) as count'))
+                ->groupBy('ref_hosp', 'ref_hosp_nm')
+                ->orderByDesc('count')
+                ->get();
+        });
+    }
+
+    /**
      * Lightweight check to see if data has changed.
+     * Super-fast polling endpoint for real-time detection.
+     * No caching - always returns fresh data.
      */
     public function checkUpdates(Request $request)
     {
         $today = date('Y-m-d');
         
-        // Get the latest timestamp from either daily stats or clinic stats
-        $latestStat = DailyDashboardStat::select('updated_at')->orderByDesc('updated_at')->first();
-        $latestClinic = ClinicStat::select('updated_at')->orderByDesc('updated_at')->first();
+        // Get the latest visit ID (fastest way to detect new records)
+        $latestVisitId = (int) Visit::max('id') ?? 0;
         
+        // Get total visit count for today (detects deletes too)
+        $todayVisitCount = (int) Visit::whereDate('visit_date', $today)->count();
+        
+        // Get total overall visit count (detects any changes)
+        $totalVisitCount = (int) Visit::count();
+        
+        // Get the latest sync timestamp from aggregated stats
+        $latestStat = DailyDashboardStat::select('updated_at')
+            ->orderByDesc('updated_at')
+            ->first();
+        $latestClinic = ClinicStat::select('updated_at')
+            ->orderByDesc('updated_at')
+            ->first();
+        
+        $statTimestamp = $latestStat ? $latestStat->updated_at->timestamp : 0;
+        $clinicTimestamp = $latestClinic ? $latestClinic->updated_at->timestamp : 0;
+        
+        // Combine all signals into a version hash
         $version = md5(
-            ($latestStat ? $latestStat->updated_at->toDateTimeString() : 'none') . 
-            ($latestClinic ? $latestClinic->updated_at->toDateTimeString() : 'none')
+            $latestVisitId . '_' .
+            $todayVisitCount . '_' .
+            $totalVisitCount . '_' .
+            $statTimestamp . '_' .
+            $clinicTimestamp
         );
 
         return response()->json([
             'version' => $version,
+            'latest_visit_id' => $latestVisitId,
+            'today_count' => $todayVisitCount,
+            'total_count' => $totalVisitCount,
+            'stat_updated' => $statTimestamp,
+            'clinic_updated' => $clinicTimestamp,
             'timestamp' => now()->toDateTimeString(),
-        ]);
+        ])->header('Cache-Control', 'no-cache, no-store, must-revalidate')
+          ->header('Pragma', 'no-cache')
+          ->header('Expires', '0');
     }
 }

@@ -12,13 +12,59 @@ use App\Models\Doctor;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 use Carbon\Carbon;
 
 class SyncService
 {
+    /**
+     * Cache version - must match DashboardController::CACHE_VERSION
+     */
+    private const CACHE_VERSION = 1;
+
     protected static $cachedClinics = [];
     protected static $cachedDepts = [];
     protected static $cachedDoctors = [];
+
+    /**
+     * Clear all dashboard caches for a specific date.
+     * This ensures UI gets fresh data immediately after sync.
+     */
+    public function clearCacheForDate($date)
+    {
+        $today = date('Y-m-d');
+        $v = self::CACHE_VERSION;
+        
+        // Clear caches that include this date
+        $keysToForget = [
+            // Single date caches
+            "dashboard_stats_{$date}_{$date}_v{$v}",
+            "clinic_breakdown_{$date}_{$date}_v{$v}",
+            "pie_stats_{$date}_{$date}_v{$v}",
+            "comp_stats_{$date}_{$date}_v{$v}",
+            "referral_stats_{$date}_{$date}_v{$v}",
+            // Today's caches (always clear if syncing today)
+            "dashboard_stats_{$today}_{$today}_v{$v}",
+            "clinic_breakdown_{$today}_{$today}_v{$v}",
+            "pie_stats_{$today}_{$today}_v{$v}",
+            "comp_stats_{$today}_{$today}_v{$v}",
+            "referral_stats_{$today}_{$today}_v{$v}",
+        ];
+
+        foreach ($keysToForget as $key) {
+            Cache::forget($key);
+        }
+
+        // Also clear service trends caches (multiple periods)
+        $periods = ['day', 'week', 'month', 'year', 'range'];
+        foreach ($periods as $period) {
+            Cache::forget("service_trends_{$period}_{$date}_{$date}_v{$v}");
+            Cache::forget("service_trends_{$period}_{$today}_{$today}_v{$v}");
+        }
+
+        Log::info("[SyncService] Cache cleared for date: {$date}");
+    }
+
     /**
      * Unified sync for a specific date (Y-m-d)
      * Wrapped in transaction for integrity.
@@ -26,7 +72,8 @@ class SyncService
     public function syncForDate($date)
     {
         $dateYmd = Carbon::parse($date)->format('Ymd');
-        $url = "http://192.168.235.250/labsms/swagger/dashboard/{$dateYmd}";
+        $baseUrl = env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard');
+        $url = "{$baseUrl}/{$dateYmd}";
         
         $syncLog = SyncLog::create([
             'sync_type' => 'visits',
@@ -62,6 +109,9 @@ class SyncService
                     'records_synced' => $syncedCount,
                     'finished_at' => now(),
                 ]);
+
+                // Clear cache so UI gets fresh data immediately
+                $this->clearCacheForDate($date);
 
                 return ['success' => true, 'count' => $syncedCount];
             }
@@ -114,13 +164,14 @@ class SyncService
         $chunks = array_chunk($dates, 20);
         $username = env('DASHBOARD_API_USERNAME');
         $password = env('DASHBOARD_API_PASSWORD');
+        $baseUrl = env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard');
 
         foreach ($chunks as $chunk) {
-            $responses = Http::pool(function (\Illuminate\Http\Client\Pool $pool) use ($chunk, $username, $password) {
+            $responses = Http::pool(function (\Illuminate\Http\Client\Pool $pool) use ($chunk, $username, $password, $baseUrl) {
                 $reqs = [];
                 foreach ($chunk as $date) {
                     $dateYmd = Carbon::parse($date)->format('Ymd');
-                    $url = "http://192.168.235.250/labsms/swagger/dashboard/{$dateYmd}";
+                    $url = "{$baseUrl}/{$dateYmd}";
                     $reqs[] = $pool->as($date)
                         ->withBasicAuth($username, $password)
                         ->connectTimeout(10)
@@ -165,6 +216,10 @@ class SyncService
                             'records_synced' => $count,
                             'finished_at' => now(),
                         ]);
+                        
+                        // Clear cache for this date
+                        $this->clearCacheForDate($date);
+                        
                         $results['total_synced_days']++;
                     } catch (\Exception $e) {
                          $syncLog->update([
@@ -248,18 +303,20 @@ class SyncService
             );
         }
         
-        // Clear dashboard caches for this specific date
+        // Clear dashboard caches for this specific date (versioned keys)
+        $v = self::CACHE_VERSION;
         $cacheKeys = [
-            "dashboard_stats_{$date}_{$date}",
-            "clinic_breakdown_{$date}_{$date}",
-            "pie_stats_{$date}_{$date}",
-            "comp_stats_{$date}_{$date}",
-            // Also clear deprecated single-date keys just in case
-            "dashboard_stats_{$date}",
-            "clinic_breakdown_{$date}",
-            "pie_stats_{$date}",
-            "comp_stats_{$date}",
+            "dashboard_stats_{$date}_{$date}_v{$v}",
+            "clinic_breakdown_{$date}_{$date}_v{$v}",
+            "pie_stats_{$date}_{$date}_v{$v}",
+            "comp_stats_{$date}_{$date}_v{$v}",
+            "referral_stats_{$date}_{$date}_v{$v}",
         ];
+
+        // Also clear service_trends caches (all period types)
+        foreach (['day', 'week', 'month', 'year', 'range'] as $period) {
+            $cacheKeys[] = "service_trends_{$period}_{$date}_{$date}_v{$v}";
+        }
 
         foreach ($cacheKeys as $key) {
             \Illuminate\Support\Facades\Cache::forget($key);
@@ -280,8 +337,9 @@ class SyncService
         $departments = [];
         $doctors = [];
         $now = now();
+        $skippedRecords = [];
 
-        foreach ($visits as $visitData) {
+        foreach ($visits as $index => $visitData) {
             // Trim and validate all incoming fields
             $cleanData = collect($visitData)->map(function ($value) {
                 if (is_string($value)) {
@@ -292,7 +350,15 @@ class SyncService
             })->all();
 
             $visitDateOrig = $cleanData['visitDate'] ?? null;
-            if (!$visitDateOrig) continue; // Essential field
+            if (!$visitDateOrig) {
+                $skippedRecords[] = [
+                    'index' => $index,
+                    'reason' => 'Missing visitDate',
+                    'mr_number' => $cleanData['mrNumber'] ?? 'unknown',
+                    'visit_num' => $cleanData['visitNum'] ?? 'unknown',
+                ];
+                continue;
+            }
 
             // Format dates
             $visitDate = $visitDateOrig;
@@ -328,6 +394,15 @@ class SyncService
                 ];
             }
 
+            // Generate fallback cons_no if missing - ensures uniqueness for multiple consultations
+            $consNo = $cleanData['consNo'] ?? null;
+            if (empty($consNo)) {
+                // Use visit_num + cons_time or index as fallback
+                $consTime = $cleanData['consTime'] ?? null;
+                $timePart = $consTime ? str_replace(':', '', $consTime) : $index;
+                $consNo = ($cleanData['visitNum'] ?? '') . '-' . $timePart;
+            }
+
             $preparedVisits[] = [
                 'mr_number' => $cleanData['mrNumber'],
                 'visit_num' => $cleanData['visitNum'],
@@ -335,7 +410,7 @@ class SyncService
                 'visit_type' => substr($cleanData['visitType'] ?? 'N', 0, 1),
                 'doct_code' => $cleanData['doctCode'] ?? null,
                 'cons_time' => $cleanData['consTime'] ?? null,
-                'cons_no' => $cleanData['consNo'] ?? null,
+                'cons_no' => $consNo,
                 'clinic_code' => $cleanData['clinicCode'],
                 'clinic_name' => $cleanData['clinicName'] ?: 'Unknown Clinic',
                 'cons_doctor' => $cleanData['consDoctor'] ?? null,
@@ -347,6 +422,7 @@ class SyncService
                 'dept_name' => $cleanData['deptName'] ?: 'Unknown Dept',
                 'pat_catg' => $cleanData['patCatg'] ?? null,
                 'ref_hosp' => $cleanData['refHosp'] ?? null,
+                'ref_hosp_nm' => $cleanData['refHospName'] ?? null,
                 'nhi_yn' => substr($cleanData['nhiYn'] ?? 'N', 0, 1),
                 'pat_catg_nm' => $patCatgNm,
                 'status' => substr($cleanData['status'] ?? 'A', 0, 1),
@@ -377,19 +453,28 @@ class SyncService
     }
 
     // Visits upsert in chunks - Ensure we use the exact unique keys from migration
+    // Including cons_no ensures each consultation is counted separately
     foreach (array_chunk($preparedVisits, 1000) as $chunk) {
         Visit::upsert(
             $chunk,
-            ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code'], // Matches visits_encounter_unique
+            ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code', 'cons_no'], // Matches visits_encounter_unique
             [
-                'visit_type', 'doct_code', 'cons_time', 'cons_no', 
+                'visit_type', 'doct_code', 'cons_time',
                 'clinic_name', 'cons_doctor', 'visit_status', 'accomp_code', 
                 'doct_cons_dt', 'doct_cons_tm', 'dept_name', 
-                'pat_catg', 'ref_hosp', 'nhi_yn', 'pat_catg_nm', 'status', 
+                'pat_catg', 'ref_hosp', 'ref_hosp_nm', 'nhi_yn', 'pat_catg_nm', 'status', 
                 'is_nhif', 'gender', 'updated_at'
             ]
         );
     }
+
+        // Log skipped records for debugging
+        if (!empty($skippedRecords)) {
+            Log::warning('[SyncService] Skipped records during bulk upsert', [
+                'skipped_count' => count($skippedRecords),
+                'records' => array_slice($skippedRecords, 0, 10), // Log first 10 only
+            ]);
+        }
 
         return count($preparedVisits);
     }

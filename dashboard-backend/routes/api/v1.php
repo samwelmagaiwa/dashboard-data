@@ -24,6 +24,7 @@ Route::prefix('dashboard')->group(function () {
     Route::get('/chart-stats', [DashboardController::class, 'getComparisonStats']);
     Route::get('/check-updates', [DashboardController::class, 'checkUpdates']);
     Route::get('/service-trends', [DashboardController::class, 'getServiceTrends']);
+    Route::get('/referral-stats', [DashboardController::class, 'getReferralStats']);
 });
 
 // Public Sync Routes (No Authentication Required)
