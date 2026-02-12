@@ -20,7 +20,7 @@ class SyncService
     /**
      * Cache version - must match DashboardController::CACHE_VERSION
      */
-    private const CACHE_VERSION = 1;
+    private const CACHE_VERSION = 4;
 
     protected static $cachedClinics = [];
     protected static $cachedDepts = [];
@@ -312,6 +312,19 @@ class SyncService
             "comp_stats_{$date}_{$date}_v{$v}",
             "referral_stats_{$date}_{$date}_v{$v}",
         ];
+
+        // NEW: Also clear Month and Year ranges that contain this date
+        // This prevents the "Selected August shows 0" issue if it was cached while empty
+        $carbon = Carbon::parse($date);
+        $monthStart = $carbon->copy()->startOfMonth()->toDateString();
+        $monthEnd = $carbon->copy()->endOfMonth()->toDateString();
+        $yearStart = $carbon->copy()->startOfYear()->toDateString();
+        $yearEnd = $carbon->copy()->endOfYear()->toDateString();
+
+        $cacheKeys[] = "dashboard_stats_{$monthStart}_{$monthEnd}_v{$v}";
+        $cacheKeys[] = "clinic_breakdown_{$monthStart}_{$monthEnd}_v{$v}";
+        $cacheKeys[] = "pie_stats_{$monthStart}_{$monthEnd}_v{$v}";
+        $cacheKeys[] = "dashboard_stats_{$yearStart}_{$yearEnd}_v{$v}";
 
         // Also clear service_trends caches (all period types)
         foreach (['day', 'week', 'month', 'year', 'range'] as $period) {

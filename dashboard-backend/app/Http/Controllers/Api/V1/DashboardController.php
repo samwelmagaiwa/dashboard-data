@@ -19,7 +19,7 @@ class DashboardController extends Controller
      * Cache version - increment this when cache structure changes.
      * This invalidates all dashboard caches without manual key updates.
      */
-    private const CACHE_VERSION = 1;
+    private const CACHE_VERSION = 4;
 
     protected $syncService;
     protected $gapService;
@@ -52,6 +52,8 @@ class DashboardController extends Controller
             $startDate = $singleDate ?? date('Y-m-d');
             $endDate = $startDate;
         }
+
+        \Illuminate\Support\Facades\Log::info("[Dashboard] Requesting stats for range: $startDate to $endDate");
 
         $cacheKey = $this->cacheKey('dashboard_stats', $startDate, $endDate);
         $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
@@ -166,7 +168,9 @@ class DashboardController extends Controller
 
                 $trend = 0.0;
                 if ($prev > 0) {
-                    $trend = round((($cur - $prev) / $prev) * 100, 1);
+                    $trend = (($cur - $prev) / $prev) * 100;
+                    // Cap at 100% as requested by user
+                    $trend = max(-100.0, min(100.0, round($trend, 1)));
                 } elseif ($cur > 0) {
                     $trend = 100.0;
                 }
@@ -389,6 +393,20 @@ class DashboardController extends Controller
         $start = Carbon::parse($startDate);
         $end = Carbon::parse($endDate);
 
+        // --- EXPANSION LOGIC FOR CHART CONTEXT ---
+        // 1. If 'day' is selected (single day range), expand to full week (Mon-Sun)
+        if ($period === 'day' && $start->diffInDays($end) == 0 && !$breakdown) {
+            $start = $start->copy()->startOfWeek(Carbon::MONDAY);
+            $end = $end->copy()->endOfWeek(Carbon::SUNDAY);
+        }
+
+        // 2. If 'year' is selected, ensure we show full Jan-Dec
+        if ($period === 'year' && !$breakdown) {
+            $start = $start->copy()->startOfYear();
+            $end = $end->copy()->endOfYear();
+        }
+        // -----------------------------------------
+
         // Use the exact range provided - no expansion
         // This ensures bars match cards data exactly
 
@@ -424,28 +442,18 @@ class DashboardController extends Controller
                     }
                     break;
                 case 'day':
-                    // Single day: show just that day
-                    if ($days === 1) {
-                        $label = $start->format('l') . ' - ' . $start->format('d M Y');
+                    // Logic for displaying days (now potentially a full week)
+                    $tempStart = $start->copy();
+                    while ($tempStart <= $end) {
+                        // Format: "Monday - 12"
+                        $label = $tempStart->format('l - d');
                         $labels[] = $label;
-                        $dataMap[$start->toDateString()] = [
+                        $dataMap[$tempStart->toDateString()] = [
                             'label' => $label,
                             'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
                             'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
                         ];
-                    } else {
-                        // Multiple days: iterate through range
-                        $tempStart = $start->copy();
-                        while ($tempStart <= $end) {
-                            $label = $tempStart->format('l') . ' - ' . $tempStart->format('d M Y');
-                            $labels[] = $label;
-                            $dataMap[$tempStart->toDateString()] = [
-                                'label' => $label,
-                                'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
-                                'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
-                            ];
-                            $tempStart->addDay();
-                        }
+                        $tempStart->addDay();
                     }
                     break;
                 case 'range':
@@ -483,26 +491,54 @@ class DashboardController extends Controller
                     }
                     break;
                 case 'month':
-                    // Iterate through actual months in range
+                    // Month View: Show Weekly Breakdown (Week 1, Week 2, etc)
+                    // We iterate through weeks within the selected month
                     $tempStart = $start->copy()->startOfMonth();
-                    while ($tempStart <= $end) {
-                        $label = $tempStart->format('M Y');
-                        $dataMap[$tempStart->format('Y-m')] = [
+                    $tempEnd = $start->copy()->endOfMonth();
+                    
+                    // Grouping by Sunday-based weeks or just standard 7-day windows?
+                    // Let's use standard Carbon week blocks starting from the 1st
+                    $weekNum = 1;
+                    while ($tempStart <= $tempEnd) {
+                        $label = "Week $weekNum";
+                        $key = "W$weekNum";
+                        $labels[] = $label;
+                        $dataMap[$key] = [
                             'label' => $label,
                             'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
-                            'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                            'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0,
+                            'start' => $tempStart->toDateString(),
+                            'end' => $tempStart->copy()->addDays(6)->min($tempEnd)->toDateString()
                         ];
-                        $labels[] = $label;
-                        $tempStart->addMonth();
+                        $tempStart->addDays(7);
+                        $weekNum++;
                     }
                     break;
                 case 'year':
-                    // Iterate through actual years in range
-                    for ($y = $start->year; $y <= $end->year; $y++) {
-                        $labels[] = (string)$y;
-                        $dataMap[$y] = [
-                            'label' => (string)$y,
-                            'opd' => 0, 'emergency' => 0, 'consulted' => 0, 
+                    if ($breakdown === 'monthly') {
+                         // Yearly Breakdown (12 Months)
+                        $tempStart = $start->copy()->startOfMonth();
+                        while ($tempStart <= $end) {
+                            $label = $tempStart->format('M'); // Jan, Feb
+                            $key = $tempStart->format('Y-m');
+                            if (!isset($dataMap[$key])) {
+                                $labels[] = $label;
+                                $dataMap[$key] = [
+                                    'label' => $label,
+                                    'opd' => 0, 'emergency' => 0, 'consulted' => 0,
+                                    'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                                ];
+                            }
+                            $tempStart->addMonth();
+                        }
+                    } else {
+                        // Default Year View (Single Aggregated Bar)
+                        $label = $start->format('Y');
+                        $key = $start->format('Y');
+                        $labels[] = $label;
+                         $dataMap[$key] = [
+                            'label' => $label,
+                            'opd' => 0, 'emergency' => 0, 'consulted' => 0,
                             'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
                         ];
                     }
@@ -510,8 +546,8 @@ class DashboardController extends Controller
             }
 
             // 2. Fetch data
-            $query = DailyDashboardStat::whereDate('stat_date', '>=', $startDate)
-                ->whereDate('stat_date', '<=', $endDate);
+            $query = DailyDashboardStat::whereDate('stat_date', '>=', $start->toDateString())
+                ->whereDate('stat_date', '<=', $end->toDateString());
 
             switch ($effectivePeriod) {
                 case 'monthly_breakdown':
@@ -521,15 +557,13 @@ class DashboardController extends Controller
                 case 'range':
                     $query->selectRaw('DATE(stat_date) as group_key');
                     break;
-                case 'week':
-                    $query->selectRaw('DATE_FORMAT(stat_date, "%Y-%u") as group_key'); // Year-WeekNumber
+                case 'year':
+                    $query->selectRaw('DATE_FORMAT(stat_date, "%Y") as group_key');
                     break;
                 case 'month':
-                    $query->selectRaw('DATE_FORMAT(stat_date, "%Y-%m") as group_key');
+                    $query->selectRaw('DATE(stat_date) as group_key');
                     break;
-                case 'year':
-                    $query->selectRaw('YEAR(stat_date) as group_key');
-                    break;
+
             }
 
             $results = $query->selectRaw('
@@ -546,6 +580,25 @@ class DashboardController extends Controller
             // 3. Map results into the pre-filled dataMap
             foreach ($results as $row) {
                 $gk = (string)$row->group_key;
+                
+                // For the 'month' case (which is now weekly), we need to find which week container the date belongs to
+                if ($period === 'month' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $gk)) {
+                    foreach ($dataMap as $key => $container) {
+                        if (isset($container['start']) && isset($container['end'])) {
+                            if ($gk >= $container['start'] && $gk <= $container['end']) {
+                                $dataMap[$key]['opd'] += (int)$row->opd;
+                                $dataMap[$key]['emergency'] += (int)$row->emergency;
+                                $dataMap[$key]['consulted'] += (int)$row->consulted;
+                                $dataMap[$key]['not_consulted'] += (int)$row->not_consulted;
+                                $dataMap[$key]['new_visits'] += (int)$row->new_visits;
+                                $dataMap[$key]['followups'] += (int)$row->followups;
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 if (isset($dataMap[$gk])) {
                     $dataMap[$gk]['opd'] = (int)$row->opd;
                     $dataMap[$gk]['emergency'] = (int)$row->emergency;
@@ -562,6 +615,20 @@ class DashboardController extends Controller
             return [
                 'labels' => $labels,
                 'datasets' => [
+                    [
+                        'type' => 'line',
+                        'label' => 'Total Trend',
+                        'data' => $orderedData->pluck('opd'),
+                        'borderColor' => '#1e293b', // Dark slate for high contrast
+                        'borderWidth' => 2,
+                        'pointBackgroundColor' => '#fff',
+                        'pointBorderColor' => '#1e293b',
+                        'pointRadius' => 4,
+                        'pointHoverRadius' => 6,
+                        'fill' => false,
+                        'tension' => 0.4, // Smooth curve
+                        'order' => 0, // Render on top
+                    ],
                     [
                         'label' => 'Total OPD',
                         'data' => $orderedData->pluck('opd'),
@@ -613,6 +680,46 @@ class DashboardController extends Controller
                 ->orderByDesc('count')
                 ->get();
         });
+    }
+
+    /**
+     * Get list of MR numbers for patients not yet consulted.
+     */
+    public function getPendingPatients(Request $request)
+    {
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
+        $singleDate = $request->query('date');
+
+        if (!$startDate || !$endDate) {
+            $startDate = $singleDate ?? date('Y-m-d');
+            $endDate = $startDate;
+        }
+
+        \Illuminate\Support\Facades\Log::info("[Dashboard] Fetching pending patients", [
+            'start' => $startDate,
+            'end' => $endDate
+        ]);
+
+        $patients = Visit::whereDate('visit_date', '>=', $startDate)
+            ->whereDate('visit_date', '<=', $endDate)
+            ->where(function($q) {
+                $q->where('visit_status', '!=', 'C')
+                  ->orWhereNull('visit_status');
+            })
+            ->select('id', 'mr_number', 'visit_date', 'cons_time')
+            ->orderBy('visit_date', 'asc')
+            ->orderBy('cons_time', 'asc')
+            ->orderBy('id', 'asc')
+            ->limit(200)
+            ->get();
+
+        \Illuminate\Support\Facades\Log::info("[Dashboard] Found pending patients: " . $patients->count());
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $patients
+        ]);
     }
 
     /**
