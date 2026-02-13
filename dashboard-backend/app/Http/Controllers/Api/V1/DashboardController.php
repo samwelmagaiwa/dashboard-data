@@ -129,13 +129,27 @@ class DashboardController extends Controller
             $endDate = $startDate;
         }
 
-        $cacheKey = $this->cacheKey('clinic_breakdown', $startDate, $endDate);
-        $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
+        $start = Carbon::parse($startDate);
+        $end = Carbon::parse($endDate);
+        $period = $request->query('period', 'day');
+
+        // --- STRICT PERIOD LOGIC (Fix: Obedience to selection) ---
+        // 1. If 'day' is selected, we STRICTLY show that day vs previous day (No expansion)
+
+        // 2. If 'year' is selected, ensure we show full Jan-Dec (standard annual overview)
+        if ($period === 'year') {
+            $start = $start->copy()->startOfYear();
+            $end = $end->copy()->endOfYear();
+        }
+
+        $startDate = $start->toDateString();
+        $endDate = $end->toDateString();
+
+        $cacheKey = $this->cacheKey('clinic_breakdown_v4', $startDate, $endDate);
+        $isToday = ($startDate <= date('Y-m-d') && date('Y-m-d') <= $endDate);
         $ttl = $isToday ? 60 : 600;
 
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
-            $start = Carbon::parse($startDate);
-            $end = Carbon::parse($endDate);
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate, $start, $end) {
             $days = $start->diffInDays($end) + 1;
 
             $prevStart = $start->copy()->subDays($days);
