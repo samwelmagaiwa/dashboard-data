@@ -18,6 +18,7 @@ Route::post('/login', [AuthController::class, 'login']);
 // Public Dashboard Routes (No Authentication Required)
 Route::prefix('dashboard')->group(function () {
     Route::get('/stats', [DashboardController::class, 'getStats']);
+    Route::get('/snapshot', [DashboardController::class, 'getSnapshot']);
     Route::get('/clinics', [DashboardController::class, 'getClinicBreakdown']);
     Route::get('/gaps', [DashboardController::class, 'getGaps']);
     Route::get('/pie-stats', [DashboardController::class, 'getPieStats']);

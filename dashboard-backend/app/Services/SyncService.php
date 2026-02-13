@@ -9,6 +9,7 @@ use App\Models\ClinicStat;
 use App\Models\Clinic;
 use App\Models\Department;
 use App\Models\Doctor;
+use App\Models\DailyReferralStat;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -299,6 +300,34 @@ class SyncService
                 [
                     'clinic_name' => $item->clinic_name ?: 'Unknown Clinic',
                     'total_visits' => (int)$item->total_visits
+                ]
+            );
+        }
+
+        // 3. Pre-aggregate Referral Stats
+        $referralData = Visit::whereDate('visit_date', $date)
+            ->whereNotNull('ref_hosp')
+            ->where('ref_hosp', '!=', '')
+            ->groupBy('ref_hosp', 'ref_hosp_nm')
+            ->select('ref_hosp as code', 'ref_hosp_nm as name', DB::raw('COUNT(*) as total'))
+            ->get();
+
+        foreach ($referralData as $item) {
+            $name = $item->name;
+            
+            // Explicit fix for Self Referral code 000037 which often has missing name
+            if ($item->code === '000037' && (empty($name) || stripos($name, 'Facility') !== false)) {
+                $name = 'SELF REFERRAL';
+            }
+
+            DailyReferralStat::updateOrCreate(
+                [
+                    'stat_date' => $date,
+                    'ref_hosp_code' => $item->code
+                ],
+                [
+                    'ref_hosp_name' => $name,
+                    'count' => (int)$item->total
                 ]
             );
         }

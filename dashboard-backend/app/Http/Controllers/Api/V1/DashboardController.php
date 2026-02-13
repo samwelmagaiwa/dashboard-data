@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\DailyDashboardStat;
 use App\Models\ClinicStat;
 use App\Models\Visit;
+use App\Models\DailyReferralStat;
 use App\Services\SyncService;
 use App\Services\GapDetectionService;
 use Illuminate\Http\Request;
@@ -102,6 +103,13 @@ class DashboardController extends Controller
                 'nhif_visits' => (int)($baseStats->nhif_visits ?? 0),
                 'emergency' => (int)($baseStats->emergency_visits ?? 0),
                 'emergency_patients' => (int)($baseStats->emergency_visits ?? 0),
+                'emergency_visits' => (int)($baseStats->emergency_visits ?? 0),
+                'foreigner' => (int)($baseStats->foreigner ?? 0),
+                'public' => (int)($baseStats->public ?? 0),
+                'ippm_private' => (int)($baseStats->ippm_private ?? 0),
+                'ippm_credit' => (int)($baseStats->ippm_credit ?? 0),
+                'cost_sharing' => (int)($baseStats->cost_sharing ?? 0),
+                'nssf' => (int)($baseStats->nssf ?? 0),
                 'categories' => [
                     'foreigner' => (int)($baseStats->foreigner ?? 0),
                     'public' => (int)($baseStats->public ?? 0),
@@ -231,7 +239,7 @@ class DashboardController extends Controller
     }
 
     /**
-     * Get data for pie charts (Gender, Visit Type, Referral Hospital).
+     * Get data for pie charts (Gender, Visit Type).
      */
     public function getPieStats(Request $request)
     {
@@ -249,9 +257,7 @@ class DashboardController extends Controller
         $ttl = $isToday ? 60 : 600;
 
         return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
-            // 1. Gender Distribution
-            // Since API doesn't return 'patSex' yet, this will mostly be 0/null for now.
-            // We count 'M' and 'F' specifically.
+            // 1. Gender Distribution (Still scanning visits as it's not in stats yet)
             $genderStats = \App\Models\Visit::whereDate('visit_date', '>=', $startDate)
                 ->whereDate('visit_date', '<=', $endDate)
                 ->selectRaw('
@@ -260,34 +266,28 @@ class DashboardController extends Controller
                 ')
                 ->first();
 
-            // 2. Visit Type (New vs Follow-Up)
-            // N = New, F = Follow-up
-            $visitTypeStats = \App\Models\Visit::whereDate('visit_date', '>=', $startDate)
-                ->whereDate('visit_date', '<=', $endDate)
-                ->selectRaw('
-                    SUM(CASE WHEN visit_type = "N" THEN 1 ELSE 0 END) as new_visits,
-                    SUM(CASE WHEN visit_type = "F" THEN 1 ELSE 0 END) as followups
-                ')
+            // 2. Visit Type (Use aggregated daily_dashboard_stats)
+            $visitTypeStats = \App\Models\DailyDashboardStat::whereDate('stat_date', '>=', $startDate)
+                ->whereDate('stat_date', '<=', $endDate)
+                ->selectRaw('SUM(new_visits) as new_visits, SUM(followups) as followups')
                 ->first();
 
-            // 3. Referral Hospital Distribution
-            // Group by ref_hosp, count, take top 5. Group rest as "Others".
-            $refStats = \App\Models\Visit::whereDate('visit_date', '>=', $startDate)
-                ->whereDate('visit_date', '<=', $endDate)
-                ->whereNotNull('ref_hosp')
-                ->where('ref_hosp', '!=', '')
-                ->select('ref_hosp', \Illuminate\Support\Facades\DB::raw('count(*) as total'))
-                ->groupBy('ref_hosp')
+            // 3. Referral Hospital Distribution (Use new DailyReferralStat table)
+            $refStats = \App\Models\DailyReferralStat::whereDate('stat_date', '>=', $startDate)
+                ->whereDate('stat_date', '<=', $endDate)
+                ->select('ref_hosp_code as code', 'ref_hosp_name as name', DB::raw('SUM(count) as total'))
+                ->groupBy('ref_hosp_code', 'ref_hosp_name')
                 ->orderByDesc('total')
                 ->get();
 
+            // Format for pie chart (top 5 + Others)
             $topRef = $refStats->take(5);
             $othersCount = $refStats->slice(5)->sum('total');
             
             $referralData = $topRef->map(function($item) {
                 return [
-                    'name' => $item->ref_hosp,
-                    'count' => $item->total
+                    'name' => $item->name ?: $item->code,
+                    'count' => (int)$item->total
                 ];
             })->values();
 
@@ -675,6 +675,10 @@ class DashboardController extends Controller
     /**
      * Get detailed referral hospital distribution.
      */
+    /**
+     * Get detailed referral hospital distribution.
+     * Optimized to use pre-aggregated DailyReferralStat table.
+     */
     public function getReferralStats(Request $request)
     {
         $startDate = $request->query('start_date', date('Y-m-d'));
@@ -682,17 +686,64 @@ class DashboardController extends Controller
 
         $cacheKey = $this->cacheKey('referral_stats', $startDate, $endDate);
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
-        // Reduced cache TTL for more responsive data updates
-        $ttl = $isToday ? 30 : 300; // 30 seconds for today, 5 minutes otherwise
+        $ttl = $isToday ? 30 : 300;
 
         return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
-            return Visit::whereBetween('visit_date', [$startDate, $endDate])
-                ->whereNotNull('ref_hosp')
-                ->where('ref_hosp', '!=', '')
-                ->select('ref_hosp as code', 'ref_hosp_nm as name', DB::raw('COUNT(*) as count'))
-                ->groupBy('ref_hosp', 'ref_hosp_nm')
-                ->orderByDesc('count')
+            // Use pre-aggregated DailyReferralStat for much better performance
+            // Group strictly by CODE to merge duplicates where names might differ slightly
+            $stats = DailyReferralStat::whereDate('stat_date', '>=', $startDate)
+                ->whereDate('stat_date', '<=', $endDate)
+                ->select('ref_hosp_code as code', DB::raw('MAX(ref_hosp_name) as name'), DB::raw('SUM(count) as total'))
+                ->groupBy('ref_hosp_code')
+                ->orderByDesc('total')
                 ->get();
+
+            if ($stats->isEmpty()) {
+                // Fallback to Scan-All-Visits query if aggregation table is empty
+                $stats = Visit::whereDate('visit_date', '>=', $startDate)
+                    ->whereDate('visit_date', '<=', $endDate)
+                    ->whereNotNull('ref_hosp')
+                    ->where('ref_hosp', '!=', '')
+                    ->select('ref_hosp as code', DB::raw('MAX(ref_hosp_nm) as name'), DB::raw('COUNT(*) as total'))
+                    ->groupBy('ref_hosp')
+                    ->orderByDesc('total')
+                    ->get();
+            }
+
+            return $stats->map(function($item) {
+                return [
+                    'code' => $item->code,
+                    'name' => $item->name,
+                    'count' => (int)$item->total
+                ];
+            });
+        });
+    }
+
+    /**
+     * Get a complete snapshot of dashboard data in one request.
+     * Consolidates all core metrics for the dashboard.
+     */
+    public function getSnapshot(Request $request)
+    {
+        $startDate = $request->query('start_date', date('Y-m-d'));
+        $endDate = $request->query('end_date', date('Y-m-d'));
+        $period = $request->query('period', 'day');
+
+        $cacheKey = $this->cacheKey('dashboard_snapshot', $startDate, $endDate, $period, $request->query('breakdown', 'none'));
+        $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
+        $ttl = $isToday ? 30 : 600;
+
+        return Cache::remember($cacheKey, $ttl, function() use ($request) {
+            return [
+                'stats' => $this->getStats($request),
+                'clinics' => $this->getClinicBreakdown($request),
+                'pie' => $this->getPieStats($request),
+                'comparison' => $this->getComparisonStats($request),
+                'referrals' => $this->getReferralStats($request),
+                'trends' => $this->getServiceTrends($request),
+                'generated_at' => now()->toDateTimeString(),
+            ];
         });
     }
 
