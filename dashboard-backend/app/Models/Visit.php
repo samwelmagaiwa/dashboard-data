@@ -35,6 +35,10 @@ class Visit extends Model
         'pat_catg_nm',
         'status',
         'gender',
+        'cons_doctor_name',
+        'pat_age',
+        'prov_diag',
+        'final_diag',
     ];
 
     /**

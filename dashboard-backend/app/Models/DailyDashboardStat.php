@@ -27,6 +27,17 @@ class DailyDashboardStat extends Model
         'ippm_credit',
         'cost_sharing',
         'nssf',
+        'duplicates',
+        'male_count',
+        'female_count',
+        'no_gender_count',
+        'unknown_gender_count',
+        'neonate_count',
+        'infant_count',
+        'child_count',
+        'adolescent_count',
+        'adult_count',
+        'elderly_count',
     ];
 
     /**

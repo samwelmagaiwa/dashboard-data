@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\DashboardController;
 use Illuminate\Support\Facades\Route;
 
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\ReportsController;
 
 /*
 |--------------------------------------------------------------------------
@@ -26,7 +27,10 @@ Route::prefix('dashboard')->group(function () {
     Route::get('/check-updates', [DashboardController::class, 'checkUpdates']);
     Route::get('/service-trends', [DashboardController::class, 'getServiceTrends']);
     Route::get('/referral-stats', [DashboardController::class, 'getReferralStats']);
+    Route::get('/gender-radar', [DashboardController::class, 'getGenderRadarStats']);
     Route::get('/pending-patients', [DashboardController::class, 'getPendingPatients']);
+    Route::get('/duplicated-data', [DashboardController::class, 'getDuplicateVisits']);
+    Route::get('/reports/pending', [ReportsController::class, 'pending']);
 });
 
 // Public Sync Routes (No Authentication Required)
@@ -43,9 +47,6 @@ Route::prefix('sync')->group(function () {
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
-
-    // Reports
-    Route::get('/reports/pending', [ReportsController::class, 'pending']);
 
     // Profile Routes
     Route::prefix('profile')->group(function () {

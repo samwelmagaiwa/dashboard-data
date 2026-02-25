@@ -20,7 +20,10 @@ class DashboardController extends Controller
      * Cache version - increment this when cache structure changes.
      * This invalidates all dashboard caches without manual key updates.
      */
-    private const CACHE_VERSION = 4;
+    private function getCacheVersion(): int
+    {
+        return config('dashboard.cache_version', 4);
+    }
 
     protected $syncService;
     protected $gapService;
@@ -36,13 +39,9 @@ class DashboardController extends Controller
      */
     private function cacheKey(string $prefix, string ...$parts): string
     {
-        return $prefix . '_' . implode('_', $parts) . '_v' . self::CACHE_VERSION;
+        return $prefix . '_' . implode('_', $parts) . '_v' . $this->getCacheVersion();
     }
 
-    /**
-     * Get summary stats for a specific date or range.
-     * Uses Cache to optimize read speed.
-     */
     public function getStats(Request $request)
     {
         $startDate = $request->query('start_date');
@@ -54,73 +53,155 @@ class DashboardController extends Controller
             $endDate = $startDate;
         }
 
-        \Illuminate\Support\Facades\Log::info("[Dashboard] Requesting stats for range: $startDate to $endDate");
-
-        $cacheKey = $this->cacheKey('dashboard_stats', $startDate, $endDate);
+        $comparison = $this->getComparisonPeriod(Carbon::parse($startDate), Carbon::parse($endDate));
+        $cacheKey = $this->cacheKey('dashboard_stats_v2', $startDate, $endDate);
         $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
-        $ttl = $isToday ? 60 : 600; // 1 minute for today, 10 minutes for historical
-        
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
-            $baseStats = DailyDashboardStat::whereDate('stat_date', '>=', $startDate)
-                ->whereDate('stat_date', '<=', $endDate)
-                ->selectRaw('
-                    SUM(total_visits) as total_visits,
-                    SUM(consulted) as consulted,
-                    (SUM(total_visits) - SUM(consulted)) as pending,
-                    SUM(new_visits) as new_visits,
-                    SUM(followups) as followups,
-                    SUM(nhif_visits) as nhif_visits,
-                    SUM(foreigner) as foreigner,
-                    SUM(public) as public,
-                    SUM(ippm_private) as ippm_private,
-                    SUM(ippm_credit) as ippm_credit,
-                    SUM(cost_sharing) as cost_sharing,
-                    SUM(nssf) as nssf,
-                    SUM(emergency) as emergency_visits
-                ')
-                ->first();
+        $ttl = $isToday ? 60 : 600;
+
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate, $comparison) {
+            $stats = $this->aggregateStats($startDate, $endDate);
+            $prevStats = $this->aggregateStats($comparison['start']->toDateString(), $comparison['end']->toDateString());
 
             $expectedDays = Carbon::parse($startDate)->diffInDays(Carbon::parse($endDate)) + 1;
-            $aggregatedDays = DailyDashboardStat::whereDate('stat_date', '>=', $startDate)
-                ->whereDate('stat_date', '<=', $endDate)
+            $aggregatedDays = DailyDashboardStat::where('stat_date', '>=', $startDate)
+                ->where('stat_date', '<=', $endDate)
                 ->count();
 
             return [
                 'start_date' => $startDate,
                 'end_date' => $endDate,
+                'compLabel' => $comparison['label'],
                 'meta' => [
                     'expected_days' => $expectedDays,
                     'aggregated_days' => $aggregatedDays,
                     'is_fully_aggregated' => $aggregatedDays >= $expectedDays,
+                    'is_syncing' => \App\Models\SyncLog::where('status', 'PROCESSING')->exists(),
                     'cached_at' => now()->toDateTimeString(),
                 ],
-                'total_visits' => (int)($baseStats->total_visits ?? 0),
-                'total_patients' => (int)($baseStats->total_visits ?? 0),
-                'consulted' => (int)($baseStats->consulted ?? 0),
-                'pending' => (int)($baseStats->pending ?? 0),
-                'new_visits' => (int)($baseStats->new_visits ?? 0),
-                'followups' => (int)($baseStats->followups ?? 0),
-                'nhif_visits' => (int)($baseStats->nhif_visits ?? 0),
-                'emergency' => (int)($baseStats->emergency_visits ?? 0),
-                'emergency_patients' => (int)($baseStats->emergency_visits ?? 0),
-                'emergency_visits' => (int)($baseStats->emergency_visits ?? 0),
+                'stats' => $stats,
+                'previous_stats' => $prevStats
+            ];
+        });
+    }
+
+    private function getComparisonPeriod(Carbon $start, Carbon $end)
+    {
+        $diffInDays = $start->diffInDays($end) + 1;
+        $prevStart = $start->copy();
+        $prevEnd = $end->copy();
+        $label = '';
+
+        // Year comparison
+        if ($start->day == 1 && $start->month == 1 && $end->day == 31 && $end->month == 12) {
+            $prevStart->subYear()->startOfYear();
+            $prevEnd->subYear()->endOfYear();
+            $label = "vs " . $prevStart->year;
+        }
+        // Month comparison
+        elseif ($start->day == 1 && $end->isLastOfMonth() && $start->month == $end->month) {
+            $prevStart->subMonth()->startOfMonth();
+            $prevEnd->subMonth()->endOfMonth();
+            $label = "vs " . $prevStart->format('M Y');
+        }
+        // Week comparison
+        elseif ($diffInDays == 7) {
+            $prevStart->subDays(7);
+            $prevEnd->subDays(7);
+            $label = "vs Prev Week";
+        }
+        // Day comparison
+        elseif ($diffInDays == 1) {
+            $prevStart->subDay();
+            $prevEnd->subDay();
+            $label = "vs Yesterday";
+        }
+        else {
+            $prevStart->subDays($diffInDays);
+            $prevEnd->subDays($diffInDays);
+            $label = "vs Prev Period";
+        }
+
+        return [
+            'start' => $prevStart,
+            'end' => $prevEnd,
+            'label' => $label
+        ];
+    }
+
+    private function aggregateStats($startDate, $endDate)
+    {
+        $baseStats = DailyDashboardStat::where('stat_date', '>=', $startDate)
+            ->where('stat_date', '<=', $endDate)
+            ->selectRaw('
+                SUM(total_visits) as total_visits,
+                SUM(consulted) as consulted,
+                (SUM(total_visits) - SUM(consulted)) as pending,
+                SUM(new_visits) as new_visits,
+                SUM(followups) as followups,
+                SUM(nhif_visits) as nhif_visits,
+                SUM(foreigner) as foreigner,
+                SUM(public) as public,
+                SUM(ippm_private) as ippm_private,
+                SUM(ippm_credit) as ippm_credit,
+                SUM(cost_sharing) as cost_sharing,
+                SUM(nssf) as nssf,
+                SUM(emergency) as emergency_visits,
+                SUM(duplicates) as duplicates,
+                SUM(male_count) as male,
+                SUM(female_count) as female,
+                SUM(no_gender_count) as no_gender,
+                SUM(unknown_gender_count) as unknown,
+                SUM(neonate_count) as neonate,
+                SUM(infant_count) as infant,
+                SUM(child_count) as child,
+                SUM(adolescent_count) as adolescent,
+                SUM(adult_count) as adult,
+                SUM(elderly_count) as elderly
+            ')
+            ->first();
+
+        return [
+            'total_visits' => (int)($baseStats->total_visits ?? 0),
+            'total_patients' => (int)($baseStats->total_visits ?? 0),
+            'consulted' => (int)($baseStats->consulted ?? 0),
+            'pending' => (int)($baseStats->pending ?? 0),
+            'new_visits' => (int)($baseStats->new_visits ?? 0),
+            'followups' => (int)($baseStats->followups ?? 0),
+            'nhif_visits' => (int)($baseStats->nhif_visits ?? 0),
+            'emergency' => (int)($baseStats->emergency_visits ?? 0),
+            'emergency_patients' => (int)($baseStats->emergency_visits ?? 0),
+            'emergency_visits' => (int)($baseStats->emergency_visits ?? 0),
+            'foreigner' => (int)($baseStats->foreigner ?? 0),
+            'public' => (int)($baseStats->public ?? 0),
+            'ippm_private' => (int)($baseStats->ippm_private ?? 0),
+            'ippm_credit' => (int)($baseStats->ippm_credit ?? 0),
+            'cost_sharing' => (int)($baseStats->cost_sharing ?? 0),
+            'nssf' => (int)($baseStats->nssf ?? 0),
+            'duplicates' => (int)($baseStats->duplicates ?? 0),
+            'gender' => [
+                'male' => (int)($baseStats->male ?? 0),
+                'female' => (int)($baseStats->female ?? 0),
+                'no_gender' => (int)($baseStats->no_gender ?? 0),
+                'unknown' => (int)($baseStats->unknown ?? 0),
+            ],
+            'age_groups' => [
+                'neonate' => (int)($baseStats->neonate ?? 0),
+                'infant' => (int)($baseStats->infant ?? 0),
+                'child' => (int)($baseStats->child ?? 0),
+                'adolescent' => (int)($baseStats->adolescent ?? 0),
+                'adult' => (int)($baseStats->adult ?? 0),
+                'elderly' => (int)($baseStats->elderly ?? 0),
+            ],
+            'categories' => [
                 'foreigner' => (int)($baseStats->foreigner ?? 0),
                 'public' => (int)($baseStats->public ?? 0),
+                'nhif' => (int)($baseStats->nhif_visits ?? 0),
                 'ippm_private' => (int)($baseStats->ippm_private ?? 0),
                 'ippm_credit' => (int)($baseStats->ippm_credit ?? 0),
                 'cost_sharing' => (int)($baseStats->cost_sharing ?? 0),
                 'nssf' => (int)($baseStats->nssf ?? 0),
-                'categories' => [
-                    'foreigner' => (int)($baseStats->foreigner ?? 0),
-                    'public' => (int)($baseStats->public ?? 0),
-                    'nhif' => (int)($baseStats->nhif_visits ?? 0),
-                    'ippm_private' => (int)($baseStats->ippm_private ?? 0),
-                    'ippm_credit' => (int)($baseStats->ippm_credit ?? 0),
-                    'cost_sharing' => (int)($baseStats->cost_sharing ?? 0),
-                    'nssf' => (int)($baseStats->nssf ?? 0),
-                ]
-            ];
-        });
+            ]
+        ];
     }
 
     /**
@@ -128,59 +209,31 @@ class DashboardController extends Controller
      */
     public function getClinicBreakdown(Request $request)
     {
-        $startDate = $request->query('start_date');
-        $endDate = $request->query('end_date');
-        $singleDate = $request->query('date');
+        $startDate = $request->query('start_date', date('Y-m-d'));
+        $endDate = $request->query('end_date', date('Y-m-d'));
 
-        if (!$startDate || !$endDate) {
-            $startDate = $singleDate ?? date('Y-m-d');
-            $endDate = $startDate;
-        }
-
-        $start = Carbon::parse($startDate);
-        $end = Carbon::parse($endDate);
-        $period = $request->query('period', 'day');
-
-        // --- STRICT PERIOD LOGIC (Fix: Obedience to selection) ---
-        // 1. If 'day' is selected, we STRICTLY show that day vs previous day (No expansion)
-
-        // 2. If 'year' is selected, ensure we show full Jan-Dec (standard annual overview)
-        if ($period === 'year') {
-            $start = $start->copy()->startOfYear();
-            $end = $end->copy()->endOfYear();
-        }
-
-        $startDate = $start->toDateString();
-        $endDate = $end->toDateString();
-
-        $cacheKey = $this->cacheKey('clinic_breakdown_v4', $startDate, $endDate);
-        $isToday = ($startDate <= date('Y-m-d') && date('Y-m-d') <= $endDate);
+        $cacheKey = $this->cacheKey('clinic_breakdown_v3', $startDate, $endDate);
+        $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate, $start, $end) {
-            $days = $start->diffInDays($end) + 1;
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
+            $comparison = $this->getComparisonPeriod(Carbon::parse($startDate), Carbon::parse($endDate));
+            $compLabel = $comparison['label'];
 
-            $prevStart = $start->copy()->subDays($days);
-            $prevEnd = $end->copy()->subDays($days);
-
-            $current = ClinicStat::whereDate('stat_date', '>=', $startDate)
-                ->whereDate('stat_date', '<=', $endDate)
+            $current = ClinicStat::where('stat_date', '>=', $startDate)
+                ->where('stat_date', '<=', $endDate)
                 ->selectRaw('clinic_name, SUM(total_visits) as total_visits')
                 ->groupBy('clinic_name')
                 ->orderByDesc('total_visits')
+                ->limit(20)
                 ->get();
 
-            $prevCounts = ClinicStat::whereDate('stat_date', '>=', $prevStart->toDateString())
-                ->whereDate('stat_date', '<=', $prevEnd->toDateString())
+            $prevCounts = ClinicStat::where('stat_date', '>=', $comparison['start']->toDateString())
+                ->where('stat_date', '<=', $comparison['end']->toDateString())
                 ->selectRaw('clinic_name, SUM(total_visits) as total_visits')
                 ->groupBy('clinic_name')
                 ->pluck('total_visits', 'clinic_name')
                 ->toArray();
-
-            $compLabel = 'vs ' . $prevStart->format('M d');
-            if ($prevStart->diffInDays($prevEnd) > 0) {
-                $compLabel .= ' - ' . $prevEnd->format('M d');
-            }
 
             $breakdown = [];
             foreach ($current as $row) {
@@ -191,7 +244,6 @@ class DashboardController extends Controller
                 $trend = 0.0;
                 if ($prev > 0) {
                     $trend = (($cur - $prev) / $prev) * 100;
-                    // Cap at 100% as requested by user
                     $trend = max(-100.0, min(100.0, round($trend, 1)));
                 } elseif ($cur > 0) {
                     $trend = 100.0;
@@ -257,57 +309,113 @@ class DashboardController extends Controller
         $ttl = $isToday ? 60 : 600;
 
         return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
-            // 1. Gender Distribution (Still scanning visits as it's not in stats yet)
-            $genderStats = \App\Models\Visit::whereDate('visit_date', '>=', $startDate)
-                ->whereDate('visit_date', '<=', $endDate)
-                ->selectRaw('
-                    SUM(CASE WHEN gender = "M" THEN 1 ELSE 0 END) as male,
-                    SUM(CASE WHEN gender = "F" THEN 1 ELSE 0 END) as female
-                ')
-                ->first();
+			// 1. Gender Distribution (Now from aggregated stats)
+			$genderStats = \App\Models\DailyDashboardStat::where('stat_date', '>=', $startDate)
+				->where('stat_date', '<=', $endDate)
+				->selectRaw('SUM(total_visits) as total, SUM(male_count) as male, SUM(female_count) as female, SUM(no_gender_count) as no_gender, SUM(unknown_gender_count) as unknown')
+				->first();
 
-            // 2. Visit Type (Use aggregated daily_dashboard_stats)
-            $visitTypeStats = \App\Models\DailyDashboardStat::whereDate('stat_date', '>=', $startDate)
-                ->whereDate('stat_date', '<=', $endDate)
-                ->selectRaw('SUM(new_visits) as new_visits, SUM(followups) as followups')
-                ->first();
+			// 2. Visit Type (Use aggregated daily_dashboard_stats)
+			$visitTypeStats = \App\Models\DailyDashboardStat::where('stat_date', '>=', $startDate)
+				->where('stat_date', '<=', $endDate)
+				->selectRaw('SUM(total_visits) as total, SUM(new_visits) as new_visits, SUM(followups) as followups')
+				->first();
 
-            // 3. Referral Hospital Distribution (Use new DailyReferralStat table)
-            $refStats = \App\Models\DailyReferralStat::whereDate('stat_date', '>=', $startDate)
-                ->whereDate('stat_date', '<=', $endDate)
-                ->select('ref_hosp_code as code', 'ref_hosp_name as name', DB::raw('SUM(count) as total'))
-                ->groupBy('ref_hosp_code', 'ref_hosp_name')
-                ->orderByDesc('total')
-                ->get();
+			// 3. Age Group Distribution (New aggregated stats)
+			$ageStats = \App\Models\DailyDashboardStat::where('stat_date', '>=', $startDate)
+				->where('stat_date', '<=', $endDate)
+				->selectRaw('SUM(total_visits) as total, SUM(neonate_count) as neonate, SUM(infant_count) as infant, SUM(child_count) as child, SUM(adolescent_count) as adolescent, SUM(adult_count) as adult, SUM(elderly_count) as elderly')
+				->first();
 
-            // Format for pie chart (top 5 + Others)
-            $topRef = $refStats->take(5);
-            $othersCount = $refStats->slice(5)->sum('total');
+            // --- FLEXIBLE FALLBACK LOGIC ---
+            // Detect discrepancies between total visits and categorical counts (stale/missing aggregates)
+            $genderSum = (int)($genderStats->male ?? 0) + (int)($genderStats->female ?? 0) + 
+                         (int)($genderStats->no_gender ?? 0) + (int)($genderStats->unknown ?? 0);
             
-            $referralData = $topRef->map(function($item) {
-                return [
-                    'name' => $item->name ?: $item->code,
-                    'count' => (int)$item->total
-                ];
-            })->values();
+            $visitTypeSum = (int)($visitTypeStats->new_visits ?? 0) + (int)($visitTypeStats->followups ?? 0);
+            
+            $ageSum = (int)($ageStats->neonate ?? 0) + (int)($ageStats->infant ?? 0) + 
+                         (int)($ageStats->child ?? 0) + (int)($ageStats->adolescent ?? 0) +
+                         (int)($ageStats->adult ?? 0) + (int)($ageStats->elderly ?? 0);
+            
+            $needsFallback = ($ageStats->total > 0 && $ageSum < $ageStats->total) || 
+                             ($genderStats->total > 0 && $genderSum < $genderStats->total) ||
+                             ($visitTypeStats->total > 0 && $visitTypeSum < $visitTypeStats->total) ||
+                             (!$genderStats->male && !$genderStats->female);
 
-            if ($othersCount > 0) {
-                $referralData->push([
-                    'name' => 'Others',
-                    'count' => $othersCount
-                ]);
+            if ($needsFallback) {
+                $rawStats = Visit::where('visit_date', '>=', $startDate)
+                    ->where('visit_date', '<=', $endDate)
+                    ->selectRaw('
+                        SUM(CASE WHEN gender = "M" THEN 1 ELSE 0 END) as male,
+                        SUM(CASE WHEN gender = "F" THEN 1 ELSE 0 END) as female,
+                        SUM(CASE WHEN (gender IS NOT NULL AND gender != "M" AND gender != "F") THEN 1 ELSE 0 END) as no_gender,
+                        SUM(CASE WHEN gender IS NULL THEN 1 ELSE 0 END) as unknown,
+                        SUM(CASE WHEN TRIM(visit_type) = "N" THEN 1 ELSE 0 END) as new_visits,
+                        SUM(CASE WHEN TRIM(visit_type) = "F" THEN 1 ELSE 0 END) as followups
+                    ')
+                    ->first();
+
+                if ($rawStats && ($rawStats->male > 0 || $rawStats->female > 0 || $rawStats->unknown > 0 || $rawStats->no_gender > 0)) {
+                    $genderStats = (object)[
+                        'total' => (int)$rawStats->male + (int)$rawStats->female + (int)$rawStats->no_gender + (int)$rawStats->unknown,
+                        'male' => $rawStats->male,
+                        'female' => $rawStats->female,
+                        'no_gender' => $rawStats->no_gender,
+                        'unknown' => $rawStats->unknown
+                    ];
+                    $visitTypeStats = (object)[
+                        'total' => (int)$rawStats->new_visits + (int)$rawStats->followups,
+                        'new_visits' => $rawStats->new_visits,
+                        'followups' => $rawStats->followups
+                    ];
+                }
+
+                if ($ageSum < $genderStats->total) {
+                    $rawAgeStats = Visit::where('visit_date', '>=', $startDate)
+                        ->where('visit_date', '<=', $endDate)
+                        ->selectRaw('
+                            SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28 THEN 1 ELSE 0 END) as neonate,
+                            SUM(CASE WHEN pat_age IS NOT NULL AND (CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0) AND NOT (CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28) THEN 1 ELSE 0 END) as infant,
+                            SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 1 AND 12 THEN 1 ELSE 0 END) as child,
+                            SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 13 AND 17 THEN 1 ELSE 0 END) as adolescent,
+                            SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 18 AND 59 THEN 1 ELSE 0 END) as adult,
+                            SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) >= 60 THEN 1 ELSE 0 END) as elderly
+                        ')
+                        ->first();
+                    
+                    if ($rawAgeStats) {
+                        $ageStats = (object)[
+                            'neonate' => $rawAgeStats->neonate,
+                            'infant' => $rawAgeStats->infant,
+                            'child' => $rawAgeStats->child,
+                            'adolescent' => $rawAgeStats->adolescent,
+                            'adult' => $rawAgeStats->adult,
+                            'elderly' => $rawAgeStats->elderly
+                        ];
+                    }
+                }
             }
 
             return [
                 'gender' => [
                     'male' => (int)($genderStats->male ?? 0),
                     'female' => (int)($genderStats->female ?? 0),
+                    'no_gender' => (int)($genderStats->no_gender ?? 0),
+                    'unknown' => (int)($genderStats->unknown ?? 0),
                 ],
                 'visit_type' => [
                     'new' => (int)($visitTypeStats->new_visits ?? 0),
                     'followup' => (int)($visitTypeStats->followups ?? 0),
                 ],
-                'referral' => $referralData
+                'age_groups' => [
+                    'neonate' => (int)($ageStats->neonate ?? 0),
+                    'infant' => (int)($ageStats->infant ?? 0),
+                    'child' => (int)($ageStats->child ?? 0),
+                    'adolescent' => (int)($ageStats->adolescent ?? 0),
+                    'adult' => (int)($ageStats->adult ?? 0),
+                    'elderly' => (int)($ageStats->elderly ?? 0),
+                ]
             ];
         });
     }
@@ -317,73 +425,47 @@ class DashboardController extends Controller
      */
     public function getComparisonStats(Request $request)
     {
-        $startDate = $request->query('start_date');
-        $endDate = $request->query('end_date');
-        $singleDate = $request->query('date');
+        $startDate = $request->query('start_date', date('Y-m-d'));
+        $endDate = $request->query('end_date', date('Y-m-d'));
 
-        if (!$startDate || !$endDate) {
-            $startDate = $singleDate ?? date('Y-m-d');
-            $endDate = $startDate;
-        }
-
-        $cacheKey = $this->cacheKey('comp_stats', $startDate, $endDate);
-        $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
+        $cacheKey = $this->cacheKey('comparison_radar_v3', $startDate, $endDate);
+        $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
         return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
-            $start = Carbon::parse($startDate);
-            $end = Carbon::parse($endDate);
-            $days = $start->diffInDays($end) + 1;
+            $comparison = $this->getComparisonPeriod(Carbon::parse($startDate), Carbon::parse($endDate));
 
-            $prevStart = $start->copy()->subDays($days);
-            $prevEnd = $end->copy()->subDays($days);
+            $current = $this->aggregateStats($startDate, $endDate);
+            $previous = $this->aggregateStats($comparison['start']->toDateString(), $comparison['end']->toDateString());
 
-            // Helper to get category counts
-            $getCatCounts = function($s, $e) {
-                return DailyDashboardStat::whereDate('stat_date', '>=', $s)
-                    ->whereDate('stat_date', '<=', $e)
-                    ->selectRaw('
-                        SUM(public) as public,
-                        SUM(nhif_visits) as nhif,
-                        SUM(ippm_private) as ippm_private,
-                        SUM(ippm_credit) as ippm_credit,
-                        SUM(cost_sharing) as cost_sharing,
-                        SUM(nssf) as nssf,
-                        SUM(foreigner) as foreigner
-                    ')
-                    ->first();
-            };
-
-            $current = $getCatCounts($startDate, $endDate);
-            $previous = $getCatCounts($prevStart->toDateString(), $prevEnd->toDateString());
-
-            // Normalize labels for radar chart
+            // Radar Chart Labels (Categories)
             $labels = ['PUBLIC', 'NHIF', 'IPPM-PRV', 'IPPM-CRD', 'COST-SH', 'NSSF', 'FOREIGN'];
-            
+
             return [
                 'labels' => $labels,
                 'period_labels' => [
-                    'current' => $start->format('M d') . ' - ' . $end->format('M d'),
-                    'previous' => $prevStart->format('M d') . ' - ' . $prevEnd->format('M d'),
+                    'current' => Carbon::parse($startDate)->format('M d') . ' - ' . Carbon::parse($endDate)->format('M d'),
+                    'previous' => $comparison['start']->format('M d') . ' - ' . $comparison['end']->format('M d'),
                 ],
                 'current' => [
-                    (int)($current->public ?? 0),
-                    (int)($current->nhif ?? 0),
-                    (int)($current->ippm_private ?? 0),
-                    (int)($current->ippm_credit ?? 0),
-                    (int)($current->cost_sharing ?? 0),
-                    (int)($current->nssf ?? 0),
-                    (int)($current->foreigner ?? 0),
+                    (int)($current['categories']['public'] ?? 0),
+                    (int)($current['categories']['nhif'] ?? 0),
+                    (int)($current['categories']['ippm_private'] ?? 0),
+                    (int)($current['categories']['ippm_credit'] ?? 0),
+                    (int)($current['categories']['cost_sharing'] ?? 0),
+                    (int)($current['categories']['nssf'] ?? 0),
+                    (int)($current['categories']['foreigner'] ?? 0),
                 ],
                 'previous' => [
-                    (int)($previous->public ?? 0),
-                    (int)($previous->nhif ?? 0),
-                    (int)($previous->ippm_private ?? 0),
-                    (int)($previous->ippm_credit ?? 0),
-                    (int)($previous->cost_sharing ?? 0),
-                    (int)($previous->nssf ?? 0),
-                    (int)($previous->foreigner ?? 0),
-                ]
+                    (int)($previous['categories']['public'] ?? 0),
+                    (int)($previous['categories']['nhif'] ?? 0),
+                    (int)($previous['categories']['ippm_private'] ?? 0),
+                    (int)($previous['categories']['ippm_credit'] ?? 0),
+                    (int)($previous['categories']['cost_sharing'] ?? 0),
+                    (int)($previous['categories']['nssf'] ?? 0),
+                    (int)($previous['categories']['foreigner'] ?? 0),
+                ],
+                'compLabel' => $comparison['label']
             ];
         });
     }
@@ -429,8 +511,9 @@ class DashboardController extends Controller
         // Reduced cache TTL for more responsive data updates
         $includesToday = ($startDate <= $now && $endDate >= $now);
         $ttl = $includesToday ? 30 : 300; // 30 seconds for today, 5 minutes otherwise
+        $breakdownSuffix = $breakdown === 'monthly' ? '_monthly' : '';
 
-        return Cache::remember($cacheKey, $ttl, function() use ($period, $startDate, $endDate, $start, $end, $breakdown) {
+        return Cache::remember($cacheKey . $breakdownSuffix, $ttl, function() use ($period, $startDate, $endDate, $start, $end, $breakdown) {
             $labels = [];
             $dataMap = [];
             $days = $start->diffInDays($end) + 1;
@@ -490,7 +573,7 @@ class DashboardController extends Controller
                     $tempEnd = $end->copy()->endOfWeek(Carbon::SUNDAY);
                     $seenWeeks = [];
                     while ($tempStart <= $tempEnd) {
-                        $key = $tempStart->format('Y-W');
+                        $key = $tempStart->format('o-W');
                         if (!isset($seenWeeks[$key])) {
                             $label = "Week " . $tempStart->weekOfMonth . " (" . $tempStart->format('M') . ")";
                             $labels[] = $label;
@@ -529,55 +612,35 @@ class DashboardController extends Controller
                     }
                     break;
                 case 'year':
-                    if ($breakdown === 'monthly') {
-                         // Yearly Breakdown (12 Months)
-                        $tempStart = $start->copy()->startOfMonth();
-                        while ($tempStart <= $end) {
-                            $label = $tempStart->format('M'); // Jan, Feb
-                            $key = $tempStart->format('Y-m');
-                            if (!isset($dataMap[$key])) {
-                                $labels[] = $label;
-                                $dataMap[$key] = [
-                                    'label' => $label,
-                                    'opd' => 0, 'emergency' => 0, 'consulted' => 0,
-                                    'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
-                                ];
-                            }
-                            $tempStart->addMonth();
-                        }
-                    } else {
-                        // Default Year View (Single Aggregated Bar)
-                        $label = $start->format('Y');
-                        $key = $start->format('Y');
-                        $labels[] = $label;
-                         $dataMap[$key] = [
-                            'label' => $label,
-                            'opd' => 0, 'emergency' => 0, 'consulted' => 0,
-                            'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
-                        ];
-                    }
+                    // Default Year View (Single Aggregated Bar)
+                    $label = $start->format('Y');
+                    $key = $start->format('Y');
+                    $labels[] = $label;
+                    $dataMap[$key] = [
+                        'label' => $label,
+                        'opd' => 0, 'emergency' => 0, 'consulted' => 0,
+                        'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
+                    ];
                     break;
             }
 
             // 2. Fetch data
-            $query = DailyDashboardStat::whereDate('stat_date', '>=', $start->toDateString())
-                ->whereDate('stat_date', '<=', $end->toDateString());
+            $query = DailyDashboardStat::where('stat_date', '>=', $start->toDateString())
+                ->where('stat_date', '<=', $end->toDateString());
 
             switch ($effectivePeriod) {
                 case 'monthly_breakdown':
                     $query->selectRaw('DATE_FORMAT(stat_date, "%Y-%m") as group_key');
                     break;
-                case 'day':
-                case 'range':
-                    $query->selectRaw('DATE(stat_date) as group_key');
-                    break;
                 case 'year':
                     $query->selectRaw('DATE_FORMAT(stat_date, "%Y") as group_key');
                     break;
-                case 'month':
-                    $query->selectRaw('DATE(stat_date) as group_key');
+                case 'week':
+                    $query->selectRaw('DATE_FORMAT(stat_date, "%x-%v") as group_key'); // ISO Year-Week
                     break;
-
+                default: // day, range, month
+                    $query->selectRaw('DATE_FORMAT(stat_date, "%Y-%m-%d") as group_key');
+                    break;
             }
 
             $results = $query->selectRaw('
@@ -691,8 +754,8 @@ class DashboardController extends Controller
         return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
             // Use pre-aggregated DailyReferralStat for much better performance
             // Group strictly by CODE to merge duplicates where names might differ slightly
-            $stats = DailyReferralStat::whereDate('stat_date', '>=', $startDate)
-                ->whereDate('stat_date', '<=', $endDate)
+            $stats = DailyReferralStat::where('stat_date', '>=', $startDate)
+                ->where('stat_date', '<=', $endDate)
                 ->select('ref_hosp_code as code', DB::raw('MAX(ref_hosp_name) as name'), DB::raw('SUM(count) as total'))
                 ->groupBy('ref_hosp_code')
                 ->orderByDesc('total')
@@ -700,8 +763,8 @@ class DashboardController extends Controller
 
             if ($stats->isEmpty()) {
                 // Fallback to Scan-All-Visits query if aggregation table is empty
-                $stats = Visit::whereDate('visit_date', '>=', $startDate)
-                    ->whereDate('visit_date', '<=', $endDate)
+                $stats = Visit::where('visit_date', '>=', $startDate)
+                ->where('visit_date', '<=', $endDate)
                     ->whereNotNull('ref_hosp')
                     ->where('ref_hosp', '!=', '')
                     ->select('ref_hosp as code', DB::raw('MAX(ref_hosp_nm) as name'), DB::raw('COUNT(*) as total'))
@@ -748,6 +811,52 @@ class DashboardController extends Controller
     }
 
     /**
+     * Get gender distribution statistics for a radar chart (by month).
+     */
+    public function getGenderRadarStats(Request $request)
+    {
+        $startDate = $request->query('start_date', Carbon::today()->startOfMonth()->toDateString());
+        $endDate = $request->query('end_date', Carbon::today()->toDateString());
+
+        $cacheKey = $this->cacheKey('gender_radar_stats', $startDate, $endDate);
+        
+        return Cache::remember($cacheKey, 3600, function() use ($startDate, $endDate) {
+            $months = [];
+            $tempStart = Carbon::parse($startDate)->startOfMonth();
+            $tempEnd = Carbon::parse($endDate)->endOfMonth();
+
+            while ($tempStart <= $tempEnd) {
+                $monthKey = $tempStart->format('Y-m');
+                $months[] = [
+                    'key' => $monthKey,
+                    'label' => $tempStart->format('M Y'),
+                    'start' => $tempStart->copy()->startOfMonth()->toDateString(),
+                    'end' => $tempStart->copy()->endOfMonth()->toDateString(),
+                ];
+                $tempStart->addMonth();
+            }
+
+            $datasets = [];
+            foreach ($months as $month) {
+                $stats = DailyDashboardStat::where('stat_date', '>=', $month['start'])
+                    ->where('stat_date', '<=', $month['end'])
+                    ->selectRaw('SUM(male_count) as male, SUM(female_count) as female, SUM(no_gender_count) as no_gender, SUM(unknown_gender_count) as unknown')
+                    ->first();
+
+                $datasets[] = [
+                    'label' => $month['label'],
+                    'male' => (int)($stats->male ?? 0),
+                    'female' => (int)($stats->female ?? 0),
+                    'other' => (int)($stats->no_gender ?? 0),
+                    'not_specified' => (int)($stats->unknown ?? 0),
+                ];
+            }
+
+            return $datasets;
+        });
+    }
+
+    /**
      * Get list of MR numbers for patients not yet consulted.
      */
     public function getPendingPatients(Request $request)
@@ -766,8 +875,8 @@ class DashboardController extends Controller
             'end' => $endDate
         ]);
 
-        $patients = Visit::whereDate('visit_date', '>=', $startDate)
-            ->whereDate('visit_date', '<=', $endDate)
+        $patients = Visit::where('visit_date', '>=', $startDate)
+            ->where('visit_date', '<=', $endDate)
             ->where(function($q) {
                 $q->where('visit_status', '!=', 'C')
                   ->orWhereNull('visit_status');
@@ -788,6 +897,76 @@ class DashboardController extends Controller
     }
 
     /**
+     * Get list of duplicate visits captured during sync.
+     */
+    public function getDuplicateVisits(Request $request)
+    {
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
+        $singleDate = $request->query('date');
+
+        if (!$startDate || !$endDate) {
+            $startDate = $singleDate ?? date('Y-m-d');
+            $endDate = $startDate;
+        }
+
+        try {
+            // Normalize dates using Carbon to handle YYYY-MM-DD, YYYYMMDD, etc.
+            $startDate = \Carbon\Carbon::parse($startDate)->format('Y-m-d');
+            $endDate = \Carbon\Carbon::parse($endDate)->format('Y-m-d');
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::warning("[Dashboard] Date parsing failed", ['start' => $startDate, 'end' => $endDate]);
+            $startDate = date('Y-m-d');
+            $endDate = $startDate;
+        }
+
+        \Illuminate\Support\Facades\Log::info("[Dashboard] Fetching duplicates normalized", [
+            'start' => $startDate,
+            'end' => $endDate
+        ]);
+
+        $duplicates = \App\Models\DuplicateVisit::select([
+                'mr_number',
+                'visit_num',
+                'visit_date',
+                'clinic_code',
+                'clinic_name',
+                'cons_time',
+                'cons_no',
+                'dept_code',
+                'dept_name',
+                'cons_doctor',
+                'pat_catg_nm',
+                \Illuminate\Support\Facades\DB::raw('COUNT(*) as occurrence_count'),
+                \Illuminate\Support\Facades\DB::raw('MAX(synchronized_at) as latest_sync_at')
+            ])
+            ->where('visit_date', '>=', $startDate)
+            ->where('visit_date', '<=', $endDate)
+            ->groupBy([
+                'mr_number',
+                'visit_num',
+                'visit_date',
+                'clinic_code',
+                'clinic_name',
+                'cons_time',
+                'cons_no',
+                'dept_code',
+                'dept_name',
+                'cons_doctor',
+                'pat_catg_nm'
+            ])
+            ->orderBy('occurrence_count', 'desc')
+            ->orderBy('visit_date', 'desc')
+            ->limit(300)
+            ->get();
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $duplicates
+        ]);
+    }
+
+    /**
      * Lightweight check to see if data has changed.
      * Super-fast polling endpoint for real-time detection.
      * No caching - always returns fresh data.
@@ -800,7 +979,7 @@ class DashboardController extends Controller
         $latestVisitId = (int) Visit::max('id') ?? 0;
         
         // Get total visit count for today (detects deletes too)
-        $todayVisitCount = (int) Visit::whereDate('visit_date', $today)->count();
+        $todayVisitCount = (int) Visit::where('visit_date', $today)->count();
         
         // Get total overall visit count (detects any changes)
         $totalVisitCount = (int) Visit::count();

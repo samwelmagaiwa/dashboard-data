@@ -29,20 +29,18 @@ class AutoSyncDailyData extends Command
     {
         $today = now()->format('Y-m-d');
         
-        $this->info("🔄 Auto-syncing data for {$today}...");
-        Log::info("[AutoSync] Starting auto-sync for {$today}");
+        $this->info("🚀 Dispatching auto-sync job for {$today} to queue...");
+        Log::info("[AutoSync] Dispatching sync job for {$today}");
         
         try {
-            // Sync today's data
-            $syncService->syncDateRange($today, $today);
+            // Dispatch to queue to leverage the 3 active workers
+            \App\Jobs\SyncForDateJob::dispatch($today)->onQueue('default');
             
-            $this->info("✅ Auto-sync completed successfully!");
-            Log::info("[AutoSync] Completed successfully for {$today}");
-            
+            $this->info("✅ Job dispatched successfully!");
             return Command::SUCCESS;
         } catch (\Exception $e) {
-            $this->error("❌ Auto-sync failed: {$e->getMessage()}");
-            Log::error("[AutoSync] Failed for {$today}: {$e->getMessage()}");
+            $this->error("❌ Failed to dispatch: {$e->getMessage()}");
+            Log::error("[AutoSync] Dispatch failed for {$today}: {$e->getMessage()}");
             
             return Command::FAILURE;
         }

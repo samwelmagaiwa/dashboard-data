@@ -18,10 +18,10 @@ use Carbon\Carbon;
 
 class SyncService
 {
-    /**
-     * Cache version - must match DashboardController::CACHE_VERSION
-     */
-    private const CACHE_VERSION = 4;
+    private function getCacheVersion(): int
+    {
+        return config('dashboard.cache_version', 4);
+    }
 
     protected static $cachedClinics = [];
     protected static $cachedDepts = [];
@@ -34,7 +34,7 @@ class SyncService
     public function clearCacheForDate($date)
     {
         $today = date('Y-m-d');
-        $v = self::CACHE_VERSION;
+        $v = $this->getCacheVersion();
         
         // Clear caches that include this date
         $keysToForget = [
@@ -50,6 +50,11 @@ class SyncService
             "pie_stats_{$today}_{$today}_v{$v}",
             "comp_stats_{$today}_{$today}_v{$v}",
             "referral_stats_{$today}_{$today}_v{$v}",
+            // Snapshot caches (multiple defaults)
+            "dashboard_snapshot_{$date}_{$date}_day_none_v{$v}",
+            "dashboard_snapshot_{$date}_{$date}_range_none_v{$v}",
+            "dashboard_snapshot_{$today}_{$today}_day_none_v{$v}",
+            "dashboard_snapshot_{$today}_{$today}_range_none_v{$v}",
         ];
 
         foreach ($keysToForget as $key) {
@@ -59,8 +64,10 @@ class SyncService
         // Also clear service trends caches (multiple periods)
         $periods = ['day', 'week', 'month', 'year', 'range'];
         foreach ($periods as $period) {
-            Cache::forget("service_trends_{$period}_{$date}_{$date}_v{$v}");
-            Cache::forget("service_trends_{$period}_{$today}_{$today}_v{$v}");
+            Cache::forget("service_trends_{$period}_{$date}_{$date}_default_v{$v}");
+            Cache::forget("service_trends_{$period}_{$date}_{$date}_monthly_v{$v}");
+            Cache::forget("service_trends_{$period}_{$today}_{$today}_default_v{$v}");
+            Cache::forget("service_trends_{$period}_{$today}_{$today}_monthly_v{$v}");
         }
 
         Log::info("[SyncService] Cache cleared for date: {$date}");
@@ -72,21 +79,30 @@ class SyncService
      */
     public function syncForDate($date)
     {
-        $dateYmd = Carbon::parse($date)->format('Ymd');
-        $baseUrl = env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard');
-        $url = "{$baseUrl}/{$dateYmd}";
+        $lockFile = storage_path("framework/cache/sync_{$date}.lock");
+        $fp = fopen($lockFile, 'w+');
         
-        $syncLog = SyncLog::create([
-            'sync_type' => 'visits',
-            'sync_date' => $date,
-            'status' => 'PROCESSING',
-            'records_synced' => 0,
-            'started_at' => now(),
-        ]);
+        if (!flock($fp, LOCK_EX | LOCK_NB)) {
+            Log::warning("[SyncService] Sync already in progress for date: {$date}");
+            fclose($fp);
+            return ['success' => false, 'error' => 'Sync already in progress for this date'];
+        }
 
         try {
-            $username = env('DASHBOARD_API_USERNAME');
-            $password = env('DASHBOARD_API_PASSWORD');
+            $dateYmd = Carbon::parse($date)->format('Ymd');
+            $baseUrl = config('dashboard.sync.base_url', env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard'));
+            $url = "{$baseUrl}/{$dateYmd}";
+            
+            $syncLog = SyncLog::create([
+                'sync_type' => 'visits',
+                'sync_date' => $date,
+                'status' => 'PROCESSING',
+                'records_synced' => 0,
+                'started_at' => now(),
+            ]);
+
+            $username = config('dashboard.sync.username', env('DASHBOARD_API_USERNAME'));
+            $password = config('dashboard.sync.password', env('DASHBOARD_API_PASSWORD'));
 
             $response = Http::withBasicAuth($username, $password)
                 ->connectTimeout(10)
@@ -98,7 +114,6 @@ class SyncService
                 $data = $response->json();
                 $visits = $data['data'] ?? [];
                 
-                // Use a single transaction for the whole date sync
                 $syncedCount = DB::transaction(function () use ($visits, $date) {
                     $count = $this->bulkUpsertVisits($visits);
                     $this->updateAggregatedStats($date);
@@ -111,8 +126,11 @@ class SyncService
                     'finished_at' => now(),
                 ]);
 
-                // Clear cache so UI gets fresh data immediately
                 $this->clearCacheForDate($date);
+
+                flock($fp, LOCK_UN);
+                fclose($fp);
+                @unlink($lockFile);
 
                 return ['success' => true, 'count' => $syncedCount];
             }
@@ -122,6 +140,11 @@ class SyncService
                 'error_message' => "API error: " . $response->status(),
                 'finished_at' => now(),
             ]);
+            
+            flock($fp, LOCK_UN);
+            fclose($fp);
+            @unlink($lockFile);
+            
             return ['success' => false, 'error' => "API error: " . $response->status()];
 
         } catch (\Exception $e) {
@@ -131,6 +154,11 @@ class SyncService
                 'error_message' => $e->getMessage(),
                 'finished_at' => now(),
             ]);
+            
+            flock($fp, LOCK_UN);
+            fclose($fp);
+            @unlink($lockFile);
+            
             return ['success' => false, 'error' => $e->getMessage()];
         }
     }
@@ -163,9 +191,9 @@ class SyncService
 
         // Process in chunks of 20 parallel requests (Optimized for speed)
         $chunks = array_chunk($dates, 20);
-        $username = env('DASHBOARD_API_USERNAME');
-        $password = env('DASHBOARD_API_PASSWORD');
-        $baseUrl = env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard');
+        $username = config('dashboard.sync.username', env('DASHBOARD_API_USERNAME'));
+        $password = config('dashboard.sync.password', env('DASHBOARD_API_PASSWORD'));
+        $baseUrl = config('dashboard.sync.base_url', env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard'));
 
         foreach ($chunks as $chunk) {
             $responses = Http::pool(function (\Illuminate\Http\Client\Pool $pool) use ($chunk, $username, $password, $baseUrl) {
@@ -263,9 +291,21 @@ class SyncService
                 SUM(CASE WHEN pat_catg_nm LIKE "%IPPM%CREDIT%" THEN 1 ELSE 0 END) as ippm_credit,
                 SUM(CASE WHEN pat_catg_nm LIKE "%COST%SHARING%" THEN 1 ELSE 0 END) as cost_sharing,
                 SUM(CASE WHEN pat_catg_nm LIKE "%NSSF%" THEN 1 ELSE 0 END) as nssf,
-                SUM(CASE WHEN dept_code = "150" THEN 1 ELSE 0 END) as emergency
+                SUM(CASE WHEN dept_code = "150" THEN 1 ELSE 0 END) as emergency,
+                SUM(CASE WHEN gender = "M" THEN 1 ELSE 0 END) as male,
+                SUM(CASE WHEN gender = "F" THEN 1 ELSE 0 END) as female,
+                SUM(CASE WHEN (gender IS NOT NULL AND gender != "M" AND gender != "F") THEN 1 ELSE 0 END) as no_gender,
+                SUM(CASE WHEN gender IS NULL THEN 1 ELSE 0 END) as unknown_gender,
+                SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28 THEN 1 ELSE 0 END) as neonate,
+                SUM(CASE WHEN pat_age IS NOT NULL AND (CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0) AND NOT (CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28) THEN 1 ELSE 0 END) as infant,
+                SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 1 AND 12 THEN 1 ELSE 0 END) as child,
+                SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 13 AND 17 THEN 1 ELSE 0 END) as adolescent,
+                SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 18 AND 59 THEN 1 ELSE 0 END) as adult,
+                SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) >= 60 THEN 1 ELSE 0 END) as elderly
             ')
             ->first();
+
+        $duplicatesCount = \App\Models\DuplicateVisit::whereDate('visit_date', $date)->count();
 
         DailyDashboardStat::updateOrCreate(
             ['stat_date' => $date],
@@ -283,6 +323,17 @@ class SyncService
                 'ippm_credit' => (int)($stats->ippm_credit ?? 0),
                 'cost_sharing' => (int)($stats->cost_sharing ?? 0),
                 'nssf' => (int)($stats->nssf ?? 0),
+                'male_count' => (int)($stats->male ?? 0),
+                'female_count' => (int)($stats->female ?? 0),
+                'no_gender_count' => (int)($stats->no_gender ?? 0),
+                'unknown_gender_count' => (int)($stats->unknown_gender ?? 0),
+                'neonate_count' => (int)($stats->neonate ?? 0),
+                'infant_count' => (int)($stats->infant ?? 0),
+                'child_count' => (int)($stats->child ?? 0),
+                'adolescent_count' => (int)($stats->adolescent ?? 0),
+                'adult_count' => (int)($stats->adult ?? 0),
+                'elderly_count' => (int)($stats->elderly ?? 0),
+                'duplicates' => (int)$duplicatesCount,
             ]
         );
 
@@ -291,17 +342,17 @@ class SyncService
             ->select('clinic_code', 'clinic_name', DB::raw('COUNT(*) as total_visits'))
             ->get();
 
-        foreach ($clinicData as $item) {
-            ClinicStat::updateOrCreate(
-                [
+        if ($clinicData->isNotEmpty()) {
+            $clinicBatch = $clinicData->map(function ($item) use ($date) {
+                return [
                     'stat_date' => $date,
-                    'clinic_code' => $item->clinic_code
-                ],
-                [
+                    'clinic_code' => $item->clinic_code,
                     'clinic_name' => $item->clinic_name ?: 'Unknown Clinic',
                     'total_visits' => (int)$item->total_visits
-                ]
-            );
+                ];
+            })->toArray();
+
+            ClinicStat::upsert($clinicBatch, ['stat_date', 'clinic_code'], ['clinic_name', 'total_visits']);
         }
 
         // 3. Pre-aggregate Referral Stats
@@ -312,34 +363,33 @@ class SyncService
             ->select('ref_hosp as code', 'ref_hosp_nm as name', DB::raw('COUNT(*) as total'))
             ->get();
 
-        foreach ($referralData as $item) {
-            $name = $item->name;
-            
-            // Explicit fix for Self Referral code 000037 which often has missing name
-            if ($item->code === '000037' && (empty($name) || stripos($name, 'Facility') !== false)) {
-                $name = 'SELF REFERRAL';
-            }
-
-            DailyReferralStat::updateOrCreate(
-                [
+        if ($referralData->isNotEmpty()) {
+            $referralBatch = $referralData->map(function ($item) use ($date) {
+                $name = $item->name;
+                // Explicit fix for Self Referral code 000037 which often has missing name
+                if ($item->code === '000037' && (empty($name) || stripos($name, 'Facility') !== false)) {
+                    $name = 'SELF REFERRAL';
+                }
+                return [
                     'stat_date' => $date,
-                    'ref_hosp_code' => $item->code
-                ],
-                [
+                    'ref_hosp_code' => $item->code,
                     'ref_hosp_name' => $name,
                     'count' => (int)$item->total
-                ]
-            );
+                ];
+            })->toArray();
+
+            DailyReferralStat::upsert($referralBatch, ['stat_date', 'ref_hosp_code'], ['ref_hosp_name', 'count']);
         }
         
         // Clear dashboard caches for this specific date (versioned keys)
-        $v = self::CACHE_VERSION;
+        $v = $this->getCacheVersion();
         $cacheKeys = [
             "dashboard_stats_{$date}_{$date}_v{$v}",
             "clinic_breakdown_{$date}_{$date}_v{$v}",
             "pie_stats_{$date}_{$date}_v{$v}",
             "comp_stats_{$date}_{$date}_v{$v}",
             "referral_stats_{$date}_{$date}_v{$v}",
+            "dashboard_snapshot_{$date}_{$date}_day_none_v{$v}",
         ];
 
         // NEW: Also clear Month and Year ranges that contain this date
@@ -357,7 +407,8 @@ class SyncService
 
         // Also clear service_trends caches (all period types)
         foreach (['day', 'week', 'month', 'year', 'range'] as $period) {
-            $cacheKeys[] = "service_trends_{$period}_{$date}_{$date}_v{$v}";
+            \Illuminate\Support\Facades\Cache::forget("service_trends_{$period}_{$date}_{$date}_default_v{$v}");
+            \Illuminate\Support\Facades\Cache::forget("service_trends_{$period}_{$date}_{$date}_monthly_v{$v}");
         }
 
         foreach ($cacheKeys as $key) {
@@ -445,7 +496,7 @@ class SyncService
                 $consNo = ($cleanData['visitNum'] ?? '') . '-' . $timePart;
             }
 
-            $preparedVisits[] = [
+            $visitRecord = [
                 'mr_number' => $cleanData['mrNumber'],
                 'visit_num' => $cleanData['visitNum'],
                 'visit_date' => $visitDate,
@@ -469,46 +520,95 @@ class SyncService
                 'pat_catg_nm' => $patCatgNm,
                 'status' => substr($cleanData['status'] ?? 'A', 0, 1),
                 'is_nhif' => $isNhif,
-                'gender' => isset($cleanData['patSex']) ? substr($cleanData['patSex'], 0, 1) : null,
+                'gender' => isset($cleanData['patGender']) ? substr($cleanData['patGender'], 0, 1) : null,
+                'cons_doctor_name' => $cleanData['consDoctName'] ?? null,
+                'pat_age' => $cleanData['patAge'] ?? null,
+                'prov_diag' => $cleanData['provDiag'] ?? null,
+                'final_diag' => $cleanData['finalDiag'] ?? null,
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
+
+            // DUPLICATE DETECTION LOGIC
+            // Criteria: mr_number, visit_num, visit_date, clinic_code, dept_code, cons_no
+            $uniqueKey = "{$visitRecord['mr_number']}_{$visitRecord['visit_num']}_{$visitRecord['visit_date']}_{$visitRecord['clinic_code']}_{$visitRecord['dept_code']}_{$visitRecord['cons_no']}";
+            
+            if (isset($seenInBatch[$uniqueKey])) {
+                // This is a duplicate within the current API batch
+                $duplicateRecords[] = $visitRecord;
+                continue;
+            }
+
+            $seenInBatch[$uniqueKey] = true;
+            $preparedVisits[] = $visitRecord;
+        }
+
+        // Store duplicates in the dedicated table
+        if (!empty($duplicateRecords)) {
+            $duplicateBatch = collect($duplicateRecords)->map(function($record) use ($now) {
+                return [
+                    'mr_number' => $record['mr_number'],
+                    'visit_num' => $record['visit_num'],
+                    'visit_date' => $record['visit_date'],
+                    'clinic_code' => $record['clinic_code'],
+                    'clinic_name' => $record['clinic_name'],
+                    'cons_time' => $record['cons_time'],
+                    'cons_no' => $record['cons_no'],
+                    'dept_code' => $record['dept_code'],
+                    'dept_name' => $record['dept_name'],
+                    'cons_doctor' => $record['cons_doctor'],
+                    'pat_catg_nm' => $record['pat_catg_nm'],
+                    'synchronized_at' => $now,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            })->toArray();
+
+            foreach (array_chunk($duplicateBatch, 400) as $chunk) {
+                \App\Models\DuplicateVisit::upsert(
+                    $chunk,
+                    ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code', 'cons_no'],
+                    ['clinic_name', 'cons_time', 'dept_name', 'cons_doctor', 'pat_catg_nm', 'synchronized_at', 'updated_at']
+                );
+            }
+            
+            Log::info("[SyncService] Captured/Updated " . count($duplicateRecords) . " duplicate records.");
         }
 
         // Master upserts - Filter out already cached items in this session
-    $newClinics = array_diff_key($clinics, self::$cachedClinics);
-    if (!empty($newClinics)) {
-        Clinic::upsert(array_values($newClinics), ['clinic_code'], ['clinic_name']);
-        self::$cachedClinics += $newClinics;
-    }
+        $newClinics = array_diff_key($clinics, self::$cachedClinics);
+        if (!empty($newClinics)) {
+            Clinic::upsert(array_values($newClinics), ['clinic_code'], ['clinic_name']);
+            self::$cachedClinics += $newClinics;
+        }
 
-    $newDepts = array_diff_key($departments, self::$cachedDepts);
-    if (!empty($newDepts)) {
-        Department::upsert(array_values($newDepts), ['dept_code'], ['dept_name']);
-        self::$cachedDepts += $newDepts;
-    }
+        $newDepts = array_diff_key($departments, self::$cachedDepts);
+        if (!empty($newDepts)) {
+            Department::upsert(array_values($newDepts), ['dept_code'], ['dept_name']);
+            self::$cachedDepts += $newDepts;
+        }
 
-    $newDoctors = array_diff_key($doctors, self::$cachedDoctors);
-    if (!empty($newDoctors)) {
-        Doctor::upsert(array_values($newDoctors), ['doctor_code'], ['doctor_code']);
-        self::$cachedDoctors += $newDoctors;
-    }
+        $newDoctors = array_diff_key($doctors, self::$cachedDoctors);
+        if (!empty($newDoctors)) {
+            Doctor::upsert(array_values($newDoctors), ['doctor_code'], ['doctor_code']);
+            self::$cachedDoctors += $newDoctors;
+        }
 
-    // Visits upsert in chunks - Ensure we use the exact unique keys from migration
-    // Including cons_no ensures each consultation is counted separately
-    foreach (array_chunk($preparedVisits, 1000) as $chunk) {
-        Visit::upsert(
-            $chunk,
-            ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code', 'cons_no'], // Matches visits_encounter_unique
-            [
-                'visit_type', 'doct_code', 'cons_time',
-                'clinic_name', 'cons_doctor', 'visit_status', 'accomp_code', 
-                'doct_cons_dt', 'doct_cons_tm', 'dept_name', 
-                'pat_catg', 'ref_hosp', 'ref_hosp_nm', 'nhi_yn', 'pat_catg_nm', 'status', 
-                'is_nhif', 'gender', 'updated_at'
-            ]
-        );
-    }
+        // Visits upsert in chunks - Ensure we use the exact unique keys from migration
+        // Including cons_no ensures each consultation is counted separately
+        foreach (array_chunk($preparedVisits, 1000) as $chunk) {
+            Visit::upsert(
+                $chunk,
+                ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code', 'cons_no'], // Matches visits_encounter_unique
+                [
+                    'visit_type', 'doct_code', 'cons_time',
+                    'clinic_name', 'cons_doctor', 'visit_status', 'accomp_code', 
+                    'doct_cons_dt', 'doct_cons_tm', 'dept_name', 
+                    'pat_catg', 'ref_hosp', 'ref_hosp_nm', 'nhi_yn', 'pat_catg_nm', 'status', 
+                    'is_nhif', 'gender', 'cons_doctor_name', 'pat_age', 'prov_diag', 'final_diag', 'updated_at'
+                ]
+            );
+        }
 
         // Log skipped records for debugging
         if (!empty($skippedRecords)) {

@@ -171,8 +171,8 @@ class SyncController extends Controller
         }
 
         $jobs = [];
-        foreach (array_chunk($dates, 5) as $chunk) {
-            $jobs[] = new \App\Jobs\SyncBatchJob($chunk);
+        foreach ($dates as $date) {
+            $jobs[] = new \App\Jobs\SyncForDateJob($date);
         }
 
         $batch = Bus::batch($jobs)
@@ -180,7 +180,7 @@ class SyncController extends Controller
             ->dispatch();
 
         return response()->json([
-            'message' => "Sync enqueued for range $startDate to $endDate (Chunked)",
+            'message' => "Sync enqueued for range $startDate to $endDate (Individual Jobs)",
             'batch_id' => $batch->id,
             'total_jobs' => $batch->totalJobs,
         ], 202);
