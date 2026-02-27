@@ -21,6 +21,7 @@ Route::prefix('dashboard')->group(function () {
     Route::get('/stats', [DashboardController::class, 'getStats']);
     Route::get('/snapshot', [DashboardController::class, 'getSnapshot']);
     Route::get('/clinics', [DashboardController::class, 'getClinicBreakdown']);
+    Route::get('/detailed-clinics', [DashboardController::class, 'getDetailedClinicVisits']);
     Route::get('/gaps', [DashboardController::class, 'getGaps']);
     Route::get('/pie-stats', [DashboardController::class, 'getPieStats']);
     Route::get('/chart-stats', [DashboardController::class, 'getComparisonStats']);

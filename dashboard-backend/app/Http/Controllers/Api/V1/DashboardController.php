@@ -273,6 +273,44 @@ class DashboardController extends Controller
     }
 
     /**
+     * Get detailed visit-level breakdown for clinics.
+     */
+    public function getDetailedClinicVisits(Request $request)
+    {
+        $startDate = $request->query('start_date', date('Y-m-d'));
+        $endDate = $request->query('end_date', date('Y-m-d'));
+
+        // No caching for detailed visits to allow for responsiveness in search
+        $query = Visit::whereDate('visit_date', '>=', $startDate)
+            ->whereDate('visit_date', '<=', $endDate)
+            ->select([
+                'mr_number',
+                'gender',
+                'pat_age',
+                'visit_type',
+                'visit_date',
+                'cons_time',
+                'doct_code',
+                'bill_doct_name',
+                'cons_doctor',      // Attend Doctor Code
+                'cons_doctor_name', // Attend Doctor Name
+                'clinic_name',
+                'clinic_code',
+                'final_diag',
+                'prov_diag'
+            ]);
+
+        $visits = $query->orderBy('clinic_name', 'asc')
+            ->orderBy('visit_date', 'desc')
+            ->get();
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $visits
+        ]);
+    }
+
+    /**
      * Get missing data dates (Gaps).
      */
     public function getGaps(Request $request)

@@ -17,6 +17,7 @@ class Visit extends Model
         'visit_type',
         'visit_date',
         'doct_code',
+        'bill_doct_name',
         'cons_time',
         'cons_no',
         'clinic_code',

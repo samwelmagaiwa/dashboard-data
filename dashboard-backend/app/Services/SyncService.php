@@ -502,6 +502,7 @@ class SyncService
                 'visit_date' => $visitDate,
                 'visit_type' => substr($cleanData['visitType'] ?? 'N', 0, 1),
                 'doct_code' => $cleanData['doctCode'] ?? null,
+                'bill_doct_name' => $cleanData['billDoctName'] ?? null,
                 'cons_time' => $cleanData['consTime'] ?? null,
                 'cons_no' => $consNo,
                 'clinic_code' => $cleanData['clinicCode'],
@@ -601,7 +602,7 @@ class SyncService
                 $chunk,
                 ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code', 'cons_no'], // Matches visits_encounter_unique
                 [
-                    'visit_type', 'doct_code', 'cons_time',
+                    'visit_type', 'doct_code', 'bill_doct_name', 'cons_time',
                     'clinic_name', 'cons_doctor', 'visit_status', 'accomp_code', 
                     'doct_cons_dt', 'doct_cons_tm', 'dept_name', 
                     'pat_catg', 'ref_hosp', 'ref_hosp_nm', 'nhi_yn', 'pat_catg_nm', 'status', 
