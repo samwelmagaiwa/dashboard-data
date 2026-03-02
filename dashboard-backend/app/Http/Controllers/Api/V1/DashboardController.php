@@ -12,6 +12,7 @@ use App\Services\GapDetectionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Bus;
 use Carbon\Carbon;
 
 class DashboardController extends Controller
@@ -22,7 +23,7 @@ class DashboardController extends Controller
      */
     private function getCacheVersion(): int
     {
-        return config('dashboard.cache_version', 4);
+        return config('dashboard.cache_version', 5);
     }
 
     protected $syncService;
@@ -58,6 +59,8 @@ class DashboardController extends Controller
         $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
+        \Illuminate\Support\Facades\Log::info("[Dashboard] getStats", ['start' => $startDate, 'end' => $endDate]);
+
         return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate, $comparison) {
             $stats = $this->aggregateStats($startDate, $endDate);
             $prevStats = $this->aggregateStats($comparison['start']->toDateString(), $comparison['end']->toDateString());
@@ -67,6 +70,12 @@ class DashboardController extends Controller
                 ->where('stat_date', '<=', $endDate)
                 ->count();
 
+            $activeBatch = DB::table('job_batches')
+                ->whereNull('finished_at')
+                ->whereNull('cancelled_at')
+                ->latest('created_at')
+                ->first();
+
             return [
                 'start_date' => $startDate,
                 'end_date' => $endDate,
@@ -75,7 +84,10 @@ class DashboardController extends Controller
                     'expected_days' => $expectedDays,
                     'aggregated_days' => $aggregatedDays,
                     'is_fully_aggregated' => $aggregatedDays >= $expectedDays,
-                    'is_syncing' => \App\Models\SyncLog::where('status', 'PROCESSING')->exists(),
+                    'is_syncing' => \App\Models\SyncLog::whereIn('status', ['PROCESSING', 'PENDING'])
+                        ->where('updated_at', '>', now()->subMinutes(15))
+                        ->exists() || ($activeBatch !== null),
+                    'active_batch_id' => $activeBatch ? $activeBatch->id : null,
                     'cached_at' => now()->toDateTimeString(),
                 ],
                 'stats' => $stats,
@@ -136,6 +148,8 @@ class DashboardController extends Controller
                 SUM(total_visits) as total_visits,
                 SUM(consulted) as consulted,
                 (SUM(total_visits) - SUM(consulted)) as pending,
+                SUM(matched_count) as matched_count,
+                SUM(mismatched_count) as mismatched_count,
                 SUM(new_visits) as new_visits,
                 SUM(followups) as followups,
                 SUM(nhif_visits) as nhif_visits,
@@ -164,6 +178,9 @@ class DashboardController extends Controller
             'total_visits' => (int)($baseStats->total_visits ?? 0),
             'total_patients' => (int)($baseStats->total_visits ?? 0),
             'consulted' => (int)($baseStats->consulted ?? 0),
+            'matched_count' => (int)($baseStats->matched_count ?? 0),
+            'mismatched_count' => (int)($baseStats->mismatched_count ?? 0),
+            'total_detailed' => (int)($baseStats->total_visits ?? 0),
             'pending' => (int)($baseStats->pending ?? 0),
             'new_visits' => (int)($baseStats->new_visits ?? 0),
             'followups' => (int)($baseStats->followups ?? 0),
@@ -225,7 +242,7 @@ class DashboardController extends Controller
                 ->selectRaw('clinic_name, SUM(total_visits) as total_visits')
                 ->groupBy('clinic_name')
                 ->orderByDesc('total_visits')
-                ->limit(20)
+                ->limit(50)
                 ->get();
 
             $prevCounts = ClinicStat::where('stat_date', '>=', $comparison['start']->toDateString())
@@ -274,15 +291,18 @@ class DashboardController extends Controller
 
     /**
      * Get detailed visit-level breakdown for clinics.
+     * Uses pagination to prevent PHP memory/timeout crashes on large date ranges.
      */
     public function getDetailedClinicVisits(Request $request)
     {
-        $startDate = $request->query('start_date', date('Y-m-d'));
-        $endDate = $request->query('end_date', date('Y-m-d'));
+        $startDate = $request->query('start_date') ?: date('Y-m-d');
+        $endDate = $request->query('end_date') ?: date('Y-m-d');
+        $maxPerPage = $request->query('export') ? 5000 : 1000;
+        $perPage = min((int) $request->query('per_page', 500), $maxPerPage);
+        $page = (int) $request->query('page', 1);
 
-        // No caching for detailed visits to allow for responsiveness in search
-        $query = Visit::whereDate('visit_date', '>=', $startDate)
-            ->whereDate('visit_date', '<=', $endDate)
+        $query = Visit::where('visit_date', '>=', $startDate)
+            ->where('visit_date', '<=', $endDate)
             ->select([
                 'mr_number',
                 'gender',
@@ -300,13 +320,19 @@ class DashboardController extends Controller
                 'prov_diag'
             ]);
 
-        $visits = $query->orderBy('clinic_name', 'asc')
+        $paginated = $query->orderBy('clinic_name', 'asc')
             ->orderBy('visit_date', 'desc')
-            ->get();
+            ->paginate($perPage, ['*'], 'page', $page);
 
         return response()->json([
             'status' => 'success',
-            'data' => $visits
+            'data' => $paginated->items(),
+            'pagination' => [
+                'current_page' => $paginated->currentPage(),
+                'last_page' => $paginated->lastPage(),
+                'per_page' => $paginated->perPage(),
+                'total' => $paginated->total(),
+            ]
         ]);
     }
 
@@ -347,93 +373,23 @@ class DashboardController extends Controller
         $ttl = $isToday ? 60 : 600;
 
         return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
-			// 1. Gender Distribution (Now from aggregated stats)
-			$genderStats = \App\Models\DailyDashboardStat::where('stat_date', '>=', $startDate)
-				->where('stat_date', '<=', $endDate)
-				->selectRaw('SUM(total_visits) as total, SUM(male_count) as male, SUM(female_count) as female, SUM(no_gender_count) as no_gender, SUM(unknown_gender_count) as unknown')
-				->first();
+            // 1. Gender Distribution (Strictly from aggregated stats)
+            $genderStats = \App\Models\DailyDashboardStat::where('stat_date', '>=', $startDate)
+                ->where('stat_date', '<=', $endDate)
+                ->selectRaw('SUM(total_visits) as total, SUM(male_count) as male, SUM(female_count) as female, SUM(no_gender_count) as no_gender, SUM(unknown_gender_count) as unknown')
+                ->first();
 
-			// 2. Visit Type (Use aggregated daily_dashboard_stats)
-			$visitTypeStats = \App\Models\DailyDashboardStat::where('stat_date', '>=', $startDate)
-				->where('stat_date', '<=', $endDate)
-				->selectRaw('SUM(total_visits) as total, SUM(new_visits) as new_visits, SUM(followups) as followups')
-				->first();
+            // 2. Visit Type (Strictly from aggregated stats)
+            $visitTypeStats = \App\Models\DailyDashboardStat::where('stat_date', '>=', $startDate)
+                ->where('stat_date', '<=', $endDate)
+                ->selectRaw('SUM(total_visits) as total, SUM(new_visits) as new_visits, SUM(followups) as followups')
+                ->first();
 
-			// 3. Age Group Distribution (New aggregated stats)
-			$ageStats = \App\Models\DailyDashboardStat::where('stat_date', '>=', $startDate)
-				->where('stat_date', '<=', $endDate)
-				->selectRaw('SUM(total_visits) as total, SUM(neonate_count) as neonate, SUM(infant_count) as infant, SUM(child_count) as child, SUM(adolescent_count) as adolescent, SUM(adult_count) as adult, SUM(elderly_count) as elderly')
-				->first();
-
-            // --- FLEXIBLE FALLBACK LOGIC ---
-            // Detect discrepancies between total visits and categorical counts (stale/missing aggregates)
-            $genderSum = (int)($genderStats->male ?? 0) + (int)($genderStats->female ?? 0) + 
-                         (int)($genderStats->no_gender ?? 0) + (int)($genderStats->unknown ?? 0);
-            
-            $visitTypeSum = (int)($visitTypeStats->new_visits ?? 0) + (int)($visitTypeStats->followups ?? 0);
-            
-            $ageSum = (int)($ageStats->neonate ?? 0) + (int)($ageStats->infant ?? 0) + 
-                         (int)($ageStats->child ?? 0) + (int)($ageStats->adolescent ?? 0) +
-                         (int)($ageStats->adult ?? 0) + (int)($ageStats->elderly ?? 0);
-            
-            $needsFallback = ($ageStats->total > 0 && $ageSum < $ageStats->total) || 
-                             ($genderStats->total > 0 && $genderSum < $genderStats->total) ||
-                             ($visitTypeStats->total > 0 && $visitTypeSum < $visitTypeStats->total) ||
-                             (!$genderStats->male && !$genderStats->female);
-
-            if ($needsFallback) {
-                $rawStats = Visit::where('visit_date', '>=', $startDate)
-                    ->where('visit_date', '<=', $endDate)
-                    ->selectRaw('
-                        SUM(CASE WHEN gender = "M" THEN 1 ELSE 0 END) as male,
-                        SUM(CASE WHEN gender = "F" THEN 1 ELSE 0 END) as female,
-                        SUM(CASE WHEN (gender IS NOT NULL AND gender != "M" AND gender != "F") THEN 1 ELSE 0 END) as no_gender,
-                        SUM(CASE WHEN gender IS NULL THEN 1 ELSE 0 END) as unknown,
-                        SUM(CASE WHEN TRIM(visit_type) = "N" THEN 1 ELSE 0 END) as new_visits,
-                        SUM(CASE WHEN TRIM(visit_type) = "F" THEN 1 ELSE 0 END) as followups
-                    ')
-                    ->first();
-
-                if ($rawStats && ($rawStats->male > 0 || $rawStats->female > 0 || $rawStats->unknown > 0 || $rawStats->no_gender > 0)) {
-                    $genderStats = (object)[
-                        'total' => (int)$rawStats->male + (int)$rawStats->female + (int)$rawStats->no_gender + (int)$rawStats->unknown,
-                        'male' => $rawStats->male,
-                        'female' => $rawStats->female,
-                        'no_gender' => $rawStats->no_gender,
-                        'unknown' => $rawStats->unknown
-                    ];
-                    $visitTypeStats = (object)[
-                        'total' => (int)$rawStats->new_visits + (int)$rawStats->followups,
-                        'new_visits' => $rawStats->new_visits,
-                        'followups' => $rawStats->followups
-                    ];
-                }
-
-                if ($ageSum < $genderStats->total) {
-                    $rawAgeStats = Visit::where('visit_date', '>=', $startDate)
-                        ->where('visit_date', '<=', $endDate)
-                        ->selectRaw('
-                            SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28 THEN 1 ELSE 0 END) as neonate,
-                            SUM(CASE WHEN pat_age IS NOT NULL AND (CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0) AND NOT (CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28) THEN 1 ELSE 0 END) as infant,
-                            SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 1 AND 12 THEN 1 ELSE 0 END) as child,
-                            SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 13 AND 17 THEN 1 ELSE 0 END) as adolescent,
-                            SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 18 AND 59 THEN 1 ELSE 0 END) as adult,
-                            SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) >= 60 THEN 1 ELSE 0 END) as elderly
-                        ')
-                        ->first();
-                    
-                    if ($rawAgeStats) {
-                        $ageStats = (object)[
-                            'neonate' => $rawAgeStats->neonate,
-                            'infant' => $rawAgeStats->infant,
-                            'child' => $rawAgeStats->child,
-                            'adolescent' => $rawAgeStats->adolescent,
-                            'adult' => $rawAgeStats->adult,
-                            'elderly' => $rawAgeStats->elderly
-                        ];
-                    }
-                }
-            }
+            // 3. Age Group Distribution (Strictly from aggregated stats)
+            $ageStats = \App\Models\DailyDashboardStat::where('stat_date', '>=', $startDate)
+                ->where('stat_date', '<=', $endDate)
+                ->selectRaw('SUM(total_visits) as total, SUM(neonate_count) as neonate, SUM(infant_count) as infant, SUM(child_count) as child, SUM(adolescent_count) as adolescent, SUM(adult_count) as adult, SUM(elderly_count) as elderly')
+                ->first();
 
             return [
                 'gender' => [
@@ -556,8 +512,19 @@ class DashboardController extends Controller
             $dataMap = [];
             $days = $start->diffInDays($end) + 1;
 
-            // If breakdown=monthly is enabled, override period handling
-            $effectivePeriod = $breakdown === 'monthly' ? 'monthly_breakdown' : $period;
+            // Smart Period Selection (Dynamic Grouping)
+            $effectivePeriod = $period;
+            if ($breakdown === 'monthly' || $period === 'year') {
+                $effectivePeriod = 'monthly_breakdown';
+            } elseif ($period === 'range') {
+                if ($days > 180) {
+                    $effectivePeriod = 'monthly_breakdown';
+                } elseif ($days > 45) {
+                    $effectivePeriod = 'week';
+                } else {
+                    $effectivePeriod = 'range'; // Force day-wise for smaller ranges
+                }
+            }
 
             // 1. Generate empty containers dynamically based on exact range
             switch ($effectivePeriod) {
@@ -602,7 +569,6 @@ class DashboardController extends Controller
                             'not_consulted' => 0, 'new_visits' => 0, 'followups' => 0
                         ];
                         $tempStart->addDay();
-                        if (count($labels) > 31) break;
                     }
                     break;
                 case 'week':
@@ -800,15 +766,8 @@ class DashboardController extends Controller
                 ->get();
 
             if ($stats->isEmpty()) {
-                // Fallback to Scan-All-Visits query if aggregation table is empty
-                $stats = Visit::where('visit_date', '>=', $startDate)
-                ->where('visit_date', '<=', $endDate)
-                    ->whereNotNull('ref_hosp')
-                    ->where('ref_hosp', '!=', '')
-                    ->select('ref_hosp as code', DB::raw('MAX(ref_hosp_nm) as name'), DB::raw('COUNT(*) as total'))
-                    ->groupBy('ref_hosp')
-                    ->orderByDesc('total')
-                    ->get();
+                // Return empty instead of hanging the UI with a 186k record scan fallback
+                return collect([]);
             }
 
             return $stats->map(function($item) {
@@ -834,6 +793,8 @@ class DashboardController extends Controller
         $cacheKey = $this->cacheKey('dashboard_snapshot', $startDate, $endDate, $period, $request->query('breakdown', 'none'));
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 30 : 600;
+
+        \Illuminate\Support\Facades\Log::info("[Dashboard] getSnapshot", ['start' => $startDate, 'end' => $endDate, 'period' => $period]);
 
         return Cache::remember($cacheKey, $ttl, function() use ($request) {
             return [

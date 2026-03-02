@@ -38,25 +38,31 @@ class SyncWatcher extends Command
 
         try {
             // 1. Get local count for today
-            $localCount = Visit::whereDate('visit_date', $today)->count();
+            $localCount = Visit::where('visit_date', $today)->count();
 
-            // 2. Check if we already synced recently and local count hasn't changed
-            $cacheKey = "sync_watcher_last_local_count_{$today}";
-            $lastKnownLocalCount = Cache::get($cacheKey);
-            
-            // If local count is same as last check and we synced within last 2 minutes, skip API call
+            // 2. Poll Throttle - don't hit HIS more than once every 15 seconds
+            $lastPollKey = "sync_watcher_last_poll_{$today}";
+            $lastPollValue = Cache::get($lastPollKey);
             $lastSyncKey = "sync_watcher_last_sync_{$today}";
-            $lastSyncTime = Cache::get($lastSyncKey);
+            $lastSyncValue = Cache::get($lastSyncKey);
             
-            if ($lastKnownLocalCount === $localCount && $lastSyncTime && now()->diffInMinutes($lastSyncTime) < 2) {
-                $this->info("⏭️ Skipping API call - no local changes since last sync");
-                return Command::SUCCESS;
+            $secondsSincePoll = $lastPollValue ? abs(now()->diffInSeconds($lastPollValue)) : 999;
+            $secondsSinceSync = $lastSyncValue ? abs(now()->diffInSeconds($lastSyncValue)) : 999;
+            
+            $this->info("⏱️ Seconds since: Poll={$secondsSincePoll}s, Sync={$secondsSinceSync}s (Target: Poll>15s, Sync>60s if same count)");
+
+            if ($secondsSincePoll < 15) {
+                if ($secondsSinceSync < 60 && Cache::get("sync_watcher_last_local_sent_{$today}") === $localCount) {
+                     $this->info("😴 Throttling active. Local state: {$localCount}");
+                     return Command::SUCCESS;
+                }
             }
 
             // 3. Get external count
             $username = env('DASHBOARD_API_USERNAME');
             $password = env('DASHBOARD_API_PASSWORD');
 
+            $this->info("📡 Polling HIS API for {$today}...");
             $response = Http::withBasicAuth($username, $password)
                 ->connectTimeout(5)
                 ->timeout(15)
@@ -65,24 +71,25 @@ class SyncWatcher extends Command
             if ($response->successful()) {
                 $data = $response->json();
                 $externalCount = count($data['data'] ?? []);
-
-                // Cache the local count for next comparison
-                Cache::put($cacheKey, $localCount, now()->addHours(2));
+                
+                // Record the poll time
+                Cache::put($lastPollKey, now(), now()->addMinutes(10));
 
                 if ($externalCount > $localCount) {
                     $diff = $externalCount - $localCount;
-                    $this->info("🔍 New data detected! External: {$externalCount}, Local: {$localCount}. Diff: {$diff}");
-                    Log::info("[SyncWatcher] New records found ({$diff}). Triggering auto-sync.");
+                    $this->info("� NEW DATA DETECTED! External: {$externalCount}, Local: {$localCount}. Syncing {$diff} new records...");
+                    Log::info("[SyncWatcher] New records found ({$diff}) for {$today}. Triggering sync.");
                     
                     // Trigger the existing sync command
                     Artisan::call('sync:auto-daily');
                     
-                    // Record sync time
-                    Cache::put($lastSyncKey, now(), now()->addHours(2));
+                    // Record sync trigger to prevent immediate re-trigger
+                    Cache::put("sync_watcher_last_sync_{$today}", now(), now()->addMinutes(10));
+                    Cache::put("sync_watcher_last_local_sent_{$today}", $localCount, now()->addMinutes(10));
                     
-                    $this->info("✅ Sync triggered successfully.");
+                    $this->info("✅ Sync dispatched.");
                 } else {
-                    $this->info("😴 No new records. Local: {$localCount}, External: {$externalCount}");
+                    $this->info("😴 Up to date. Local: {$localCount}, External: {$externalCount}");
                 }
             } else {
                 $this->error("❌ External API unreachable: " . $response->status());

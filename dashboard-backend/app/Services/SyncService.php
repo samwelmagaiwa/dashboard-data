@@ -35,7 +35,14 @@ class SyncService
     {
         $today = date('Y-m-d');
         $v = $this->getCacheVersion();
+        $dt = Carbon::parse($date);
         
+        // Calculate month and year boundaries for this date
+        $monthStart = $dt->copy()->startOfMonth()->toDateString();
+        $monthEnd = $dt->copy()->endOfMonth()->toDateString();
+        $yearStart = $dt->copy()->startOfYear()->toDateString();
+        $yearEnd = $dt->copy()->endOfYear()->toDateString();
+
         // Clear caches that include this date
         $keysToForget = [
             // Single date caches
@@ -55,6 +62,9 @@ class SyncService
             "dashboard_snapshot_{$date}_{$date}_range_none_v{$v}",
             "dashboard_snapshot_{$today}_{$today}_day_none_v{$v}",
             "dashboard_snapshot_{$today}_{$today}_range_none_v{$v}",
+            // RANGE Snapshot caches (Month/Year)
+            "dashboard_snapshot_{$monthStart}_{$monthEnd}_month_none_v{$v}",
+            "dashboard_snapshot_{$yearStart}_{$yearEnd}_year_none_v{$v}",
         ];
 
         foreach ($keysToForget as $key) {
@@ -68,9 +78,35 @@ class SyncService
             Cache::forget("service_trends_{$period}_{$date}_{$date}_monthly_v{$v}");
             Cache::forget("service_trends_{$period}_{$today}_{$today}_default_v{$v}");
             Cache::forget("service_trends_{$period}_{$today}_{$today}_monthly_v{$v}");
+            // Clear Month/Year trends
+            Cache::forget("service_trends_{$period}_{$monthStart}_{$monthEnd}_default_v{$v}");
+            Cache::forget("service_trends_{$period}_{$monthStart}_{$monthEnd}_monthly_v{$v}");
+            Cache::forget("service_trends_{$period}_{$yearStart}_{$yearEnd}_default_v{$v}");
+            Cache::forget("service_trends_{$period}_{$yearStart}_{$yearEnd}_monthly_v{$v}");
         }
 
         Log::info("[SyncService] Cache cleared for date: {$date}");
+    }
+
+    /**
+     * Clear stale sync logs that have been stuck for too long.
+     */
+    public function cleanupStaleSyncLogs($minutes = 15)
+    {
+        $staleLogs = SyncLog::where('status', 'PROCESSING')
+            ->where('updated_at', '<', now()->subMinutes($minutes))
+            ->get();
+
+        foreach ($staleLogs as $log) {
+            $log->update([
+                'status' => 'FAILED',
+                'error_message' => 'Stale process cleared by maintenance after ' . $minutes . ' minutes',
+                'finished_at' => now(),
+            ]);
+            Log::warning("[SyncService] Cleared stale sync log ID: {$log->id} for date: {$log->sync_date}");
+        }
+
+        return count($staleLogs);
     }
 
     /**
@@ -93,32 +129,71 @@ class SyncService
             $baseUrl = config('dashboard.sync.base_url', env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard'));
             $url = "{$baseUrl}/{$dateYmd}";
             
-            $syncLog = SyncLog::create([
-                'sync_type' => 'visits',
-                'sync_date' => $date,
-                'status' => 'PROCESSING',
-                'records_synced' => 0,
-                'started_at' => now(),
-            ]);
+            $syncLog = SyncLog::updateOrCreate(
+                ['sync_date' => $date, 'sync_type' => 'visits'],
+                [
+                    'status' => 'PROCESSING',
+                    'records_synced' => 0,
+                    'error_message' => null,
+                    'started_at' => now(),
+                    'finished_at' => null,
+                ]
+            );
 
             $username = config('dashboard.sync.username', env('DASHBOARD_API_USERNAME'));
             $password = config('dashboard.sync.password', env('DASHBOARD_API_PASSWORD'));
 
             $response = Http::withBasicAuth($username, $password)
-                ->connectTimeout(10)
-                ->timeout(60)
-                ->retry(2, 500)
+                ->connectTimeout(5)
+                ->timeout(15)
+                ->retry(1, 250)
                 ->get($url);
 
             if ($response->successful()) {
+                $body = $response->body();
+                
+                // Check if response is valid JSON
+                if (strpos(trim($body), '{') !== 0) {
+                     $syncLog->update([
+                        'status' => 'FAILED',
+                        'error_message' => "HIS API returned non-JSON data (possibly Debug HTML). Snippet: " . substr(strip_tags($body), 0, 200),
+                        'finished_at' => now(),
+                    ]);
+                    $this->clearCacheForDate($date);
+                    
+                    flock($fp, LOCK_UN);
+                    fclose($fp);
+                    @unlink($lockFile);
+                    
+                    return ['success' => false, 'error' => 'Invalid JSON from HIS'];
+                }
+
                 $data = $response->json();
                 $visits = $data['data'] ?? [];
                 
+                if (empty($visits) && !empty($data)) {
+                     Log::info("[SyncService] API returned success but empty 'data' array for $date");
+                }
+
+                // 1. Extract and Persist Master Data (Clinics, Departments, Doctors)
+                // We do this BEFORE the transaction to avoid holding global locks during heavy processing
+                $masterData = $this->extractMasterData($visits);
+                $this->persistMasterData('clinics', $masterData['clinics'], ['clinic_code'], ['clinic_name']);
+                $this->persistMasterData('departments', $masterData['departments'], ['dept_code'], ['dept_name']);
+                $this->persistMasterData('doctors', $masterData['doctors'], ['doctor_code'], ['doctor_code']);
+
+                // 2. Perform main visit sync in a transaction
                 $syncedCount = DB::transaction(function () use ($visits, $date) {
-                    $count = $this->bulkUpsertVisits($visits);
-                    $this->updateAggregatedStats($date);
-                    return $count;
+                    return $this->bulkUpsertVisits($visits);
                 });
+
+                // 3. Post-sync processing (Aggregated stats & healing)
+                try {
+                    $this->updateAggregatedStats($date);
+                    $this->healMissingData($date);
+                } catch (\Exception $e) {
+                    Log::warning("[SyncService] Post-sync processing failed for $date: " . $e->getMessage());
+                }
 
                 $syncLog->update([
                     'status' => 'SUCCESS',
@@ -195,81 +270,24 @@ class SyncService
         $password = config('dashboard.sync.password', env('DASHBOARD_API_PASSWORD'));
         $baseUrl = config('dashboard.sync.base_url', env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard'));
 
-        foreach ($chunks as $chunk) {
-            $responses = Http::pool(function (\Illuminate\Http\Client\Pool $pool) use ($chunk, $username, $password, $baseUrl) {
-                $reqs = [];
-                foreach ($chunk as $date) {
-                    $dateYmd = Carbon::parse($date)->format('Ymd');
-                    $url = "{$baseUrl}/{$dateYmd}";
-                    $reqs[] = $pool->as($date)
-                        ->withBasicAuth($username, $password)
-                        ->connectTimeout(10)
-                        ->timeout(60)
-                        ->get($url);
-                }
-                return $reqs;
-            });
-
-            foreach ($responses as $date => $response) {
-                $syncLog = SyncLog::create([
-                    'sync_type' => 'visits',
-                    'sync_date' => $date,
-                    'status' => 'PENDING',
-                    'records_synced' => 0,
-                    'started_at' => now(),
-                ]);
-
-                if ($response instanceof \Exception) {
-                     $syncLog->update([
-                        'status' => 'FAILED',
-                        'error_message' => $response->getMessage(),
-                        'finished_at' => now(),
-                    ]);
-                    $results['errors'][$date] = $response->getMessage();
-                    continue;
-                }
-
-                if ($response->successful()) {
-                    try {
-                        $data = $response->json();
-                        $visits = $data['data'] ?? [];
-                        
-                        $count = DB::transaction(function () use ($visits, $date) {
-                            $c = $this->bulkUpsertVisits($visits);
-                            $this->updateAggregatedStats($date);
-                            return $c;
-                        });
-                        
-                        $syncLog->update([
-                            'status' => 'SUCCESS',
-                            'records_synced' => $count,
-                            'finished_at' => now(),
-                        ]);
-                        
-                        // Clear cache for this date
-                        $this->clearCacheForDate($date);
-                        
-                        $results['total_synced_days']++;
-                    } catch (\Exception $e) {
-                         $syncLog->update([
-                            'status' => 'FAILED',
-                            'error_message' => $e->getMessage(),
-                            'finished_at' => now(),
-                        ]);
-                        $results['errors'][$date] = $e->getMessage();
-                    }
-                } else {
-                    $syncLog->update([
-                        'status' => 'FAILED',
-                        'error_message' => "API Error: " . $response->status(),
-                        'finished_at' => now(),
-                    ]);
-                    $results['errors'][$date] = "API Error: " . $response->status();
-                }
-            }
+        // For larger ranges, we should ALWAYS use the background queue to avoid timeouts
+        // and ensure each date is retried independently.
+        $jobs = [];
+        foreach ($dates as $date) {
+            $jobs[] = new \App\Jobs\SyncForDateJob($date);
         }
 
-        return $results;
+        if (empty($jobs)) return $results;
+
+        $batch = \Illuminate\Support\Facades\Bus::batch($jobs)
+            ->name("sync_range_{$startDate}_{$endDate}")
+            ->dispatch();
+
+        return [
+            'total_synced_days' => 0,
+            'batch_id' => $batch->id,
+            'message' => 'Sync enqueued for background processing.'
+        ];
     }
 
     /**
@@ -277,7 +295,7 @@ class SyncService
      */
     public function updateAggregatedStats($date)
     {
-        $stats = Visit::whereDate('visit_date', $date)
+        $stats = Visit::where('visit_date', $date)
             ->selectRaw('
                 COUNT(*) as total_visits,
                 SUM(CASE WHEN visit_status = "C" THEN 1 ELSE 0 END) as consulted,
@@ -296,16 +314,24 @@ class SyncService
                 SUM(CASE WHEN gender = "F" THEN 1 ELSE 0 END) as female,
                 SUM(CASE WHEN (gender IS NOT NULL AND gender != "M" AND gender != "F") THEN 1 ELSE 0 END) as no_gender,
                 SUM(CASE WHEN gender IS NULL THEN 1 ELSE 0 END) as unknown_gender,
-                SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28 THEN 1 ELSE 0 END) as neonate,
-                SUM(CASE WHEN pat_age IS NOT NULL AND (CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0) AND NOT (CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28) THEN 1 ELSE 0 END) as infant,
+                SUM(CASE WHEN pat_age IS NOT NULL AND (
+                    (pat_age LIKE "%.%.%" AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28) OR
+                    (pat_age NOT LIKE "%.%" AND CAST(pat_age AS UNSIGNED) = 0)
+                ) THEN 1 ELSE 0 END) as neonate,
+                SUM(CASE WHEN pat_age IS NOT NULL AND (
+                    (pat_age LIKE "%.%.%" AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0 AND NOT (CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28)) OR
+                    (pat_age LIKE "%.%" AND pat_age NOT LIKE "%.%.%" AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0)
+                ) THEN 1 ELSE 0 END) as infant,
                 SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 1 AND 12 THEN 1 ELSE 0 END) as child,
                 SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 13 AND 17 THEN 1 ELSE 0 END) as adolescent,
                 SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) BETWEEN 18 AND 59 THEN 1 ELSE 0 END) as adult,
-                SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) >= 60 THEN 1 ELSE 0 END) as elderly
+                SUM(CASE WHEN pat_age IS NOT NULL AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) >= 60 THEN 1 ELSE 0 END) as elderly,
+                SUM(CASE WHEN (cons_doctor IS NOT NULL AND doct_code IS NOT NULL AND TRIM(cons_doctor) = TRIM(doct_code)) THEN 1 ELSE 0 END) as matches,
+                SUM(CASE WHEN (cons_doctor IS NOT NULL AND doct_code IS NOT NULL AND TRIM(cons_doctor) != TRIM(doct_code)) THEN 1 ELSE 0 END) as mismatches
             ')
             ->first();
 
-        $duplicatesCount = \App\Models\DuplicateVisit::whereDate('visit_date', $date)->count();
+        $duplicatesCount = \App\Models\DuplicateVisit::where('visit_date', $date)->count();
 
         DailyDashboardStat::updateOrCreate(
             ['stat_date' => $date],
@@ -313,6 +339,8 @@ class SyncService
                 'total_visits' => (int)($stats->total_visits ?? 0),
                 'consulted' => (int)($stats->consulted ?? 0),
                 'pending' => (int)($stats->pending ?? 0),
+                'matched_count' => (int)($stats->matches ?? 0),
+                'mismatched_count' => (int)($stats->mismatches ?? 0),
                 'new_visits' => (int)($stats->new_visits ?? 0),
                 'followups' => (int)($stats->followups ?? 0),
                 'nhif_visits' => (int)($stats->nhif_visits ?? 0),
@@ -337,7 +365,7 @@ class SyncService
             ]
         );
 
-        $clinicData = Visit::whereDate('visit_date', $date)
+        $clinicData = Visit::where('visit_date', $date)
             ->groupBy('clinic_code', 'clinic_name')
             ->select('clinic_code', 'clinic_name', DB::raw('COUNT(*) as total_visits'))
             ->get();
@@ -356,7 +384,7 @@ class SyncService
         }
 
         // 3. Pre-aggregate Referral Stats
-        $referralData = Visit::whereDate('visit_date', $date)
+        $referralData = Visit::where('visit_date', $date)
             ->whereNotNull('ref_hosp')
             ->where('ref_hosp', '!=', '')
             ->groupBy('ref_hosp', 'ref_hosp_nm')
@@ -426,11 +454,10 @@ class SyncService
         }
 
         $preparedVisits = [];
-        $clinics = [];
-        $departments = [];
-        $doctors = [];
         $now = now();
         $skippedRecords = [];
+        $seenInBatch = []; // NEW: Fix undefined variable
+        $duplicateRecords = []; // NEW: Fix undefined variable
 
         foreach ($visits as $index => $visitData) {
             // Trim and validate all incoming fields
@@ -468,24 +495,7 @@ class SyncService
             $patCatgNm = $cleanData['patCatgNm'] ?? '';
             $isNhif = (stripos($patCatgNm, 'NHIF') !== false) ? 'Y' : 'N';
 
-            // Master data prep
-            if (!empty($cleanData['clinicCode'])) {
-                $clinics[$cleanData['clinicCode']] = [
-                    'clinic_code' => $cleanData['clinicCode'],
-                    'clinic_name' => $cleanData['clinicName'] ?: 'Unknown Clinic'
-                ];
-            }
-            if (!empty($cleanData['deptCode'])) {
-                $departments[$cleanData['deptCode']] = [
-                    'dept_code' => $cleanData['deptCode'],
-                    'dept_name' => $cleanData['deptName'] ?: 'Unknown Dept'
-                ];
-            }
-            if (!empty($cleanData['doctCode'])) {
-                $doctors[$cleanData['doctCode']] = [
-                    'doctor_code' => $cleanData['doctCode']
-                ];
-            }
+            // Master data prep removed from here - now handled by extractMasterData()
 
             // Generate fallback cons_no if missing - ensures uniqueness for multiple consultations
             $consNo = $cleanData['consNo'] ?? null;
@@ -576,24 +586,7 @@ class SyncService
             Log::info("[SyncService] Captured/Updated " . count($duplicateRecords) . " duplicate records.");
         }
 
-        // Master upserts - Filter out already cached items in this session
-        $newClinics = array_diff_key($clinics, self::$cachedClinics);
-        if (!empty($newClinics)) {
-            Clinic::upsert(array_values($newClinics), ['clinic_code'], ['clinic_name']);
-            self::$cachedClinics += $newClinics;
-        }
-
-        $newDepts = array_diff_key($departments, self::$cachedDepts);
-        if (!empty($newDepts)) {
-            Department::upsert(array_values($newDepts), ['dept_code'], ['dept_name']);
-            self::$cachedDepts += $newDepts;
-        }
-
-        $newDoctors = array_diff_key($doctors, self::$cachedDoctors);
-        if (!empty($newDoctors)) {
-            Doctor::upsert(array_values($newDoctors), ['doctor_code'], ['doctor_code']);
-            self::$cachedDoctors += $newDoctors;
-        }
+        // Master upserts removed from here - now handled explicitly in syncForDate()
 
         // Visits upsert in chunks - Ensure we use the exact unique keys from migration
         // Including cons_no ensures each consultation is counted separately
@@ -620,5 +613,170 @@ class SyncService
         }
 
         return count($preparedVisits);
+    }
+
+    /**
+     * "Heal" missing data by looking up names from other records with the same code.
+     * ULTRA-FAST VERSION: Uses bulk updates instead of row-by-row processing.
+     */
+    public function healMissingData($date = null)
+    {
+        Log::info("[SyncService] Starting Turbo Healing " . ($date ? "for $date" : "for all records"));
+        $healedCount = 0;
+
+        // 1. Build the Billing Doctor Map (Code -> Name)
+        $currentDocCodes = [];
+        if ($date) {
+            $currentDocCodes = DB::table('visits')->where('visit_date', $date)->distinct()->pluck('doct_code')->filter()->toArray();
+        }
+
+        $billQuery = DB::table('visits')
+            ->whereNotNull('bill_doct_name')
+            ->where('bill_doct_name', '!=', '')
+            ->whereNotNull('doct_code')
+            ->where('doct_code', '!=', '');
+        
+        if (!empty($currentDocCodes)) {
+            $billQuery->whereIn('doct_code', $currentDocCodes);
+        }
+
+        $billMap = $billQuery->select('doct_code', 'bill_doct_name')
+            ->distinct()
+            ->pluck('bill_doct_name', 'doct_code');
+
+        // 2. Build the Consulting Doctor Map (Code -> Name)
+        $currentConsCodes = [];
+        if ($date) {
+            $currentConsCodes = DB::table('visits')->where('visit_date', $date)->distinct()->pluck('cons_doctor')->filter()->toArray();
+        }
+
+        $consQuery = DB::table('visits')
+            ->whereNotNull('cons_doctor_name')
+            ->where('cons_doctor_name', '!=', '')
+            ->whereNotNull('cons_doctor')
+            ->where('cons_doctor', '!=', '');
+            
+        if (!empty($currentConsCodes)) {
+            $consQuery->whereIn('cons_doctor', $currentConsCodes);
+        }
+
+        $consMap = $consQuery->select('cons_doctor', 'cons_doctor_name')
+            ->distinct()
+            ->pluck('cons_doctor_name', 'cons_doctor');
+
+        // 3. Perform Bulk Updates for Billing Doctor Names
+        // Optimization: Only iterate over doctors found in the current date if provided
+        $billCodes = $billMap->keys();
+        if ($date) {
+            $currentDocCodes = DB::table('visits')->where('visit_date', $date)->distinct()->pluck('doct_code')->filter();
+            $billCodes = $billCodes->intersect($currentDocCodes);
+        }
+
+        foreach ($billCodes as $code) {
+            $name = $billMap[$code];
+            if (empty($code)) continue;
+            
+            $query = DB::table('visits')
+                ->where('doct_code', (string)$code)
+                ->where(function($q) {
+                    $q->whereNull('bill_doct_name')->orWhere('bill_doct_name', '');
+                });
+
+            if ($date) $query->where('visit_date', $date);
+
+            $healedCount += $query->update(['bill_doct_name' => $name, 'updated_at' => now()]);
+        }
+
+        // 4. Perform Bulk Updates for Consulting Doctor Names
+        $consCodes = $consMap->keys();
+        if ($date) {
+            $currentConsCodes = DB::table('visits')->where('visit_date', $date)->distinct()->pluck('cons_doctor')->filter();
+            $consCodes = $consCodes->intersect($currentConsCodes);
+        }
+
+        foreach ($consCodes as $code) {
+            $name = $consMap[$code];
+            if (empty($code)) continue;
+
+            $query = DB::table('visits')
+                ->where('cons_doctor', (string)$code)
+                ->where(function($q) {
+                    $q->whereNull('cons_doctor_name')->orWhere('cons_doctor_name', '');
+                });
+
+            if ($date) $query->where('visit_date', $date);
+
+            $healedCount += $query->update(['cons_doctor_name' => $name, 'updated_at' => now()]);
+        }
+
+        if ($healedCount > 0) {
+            Log::info("[SyncService] Successfully performed $healedCount bulk heals.");
+        }
+
+        return $healedCount;
+    }
+
+    /**
+     * Parse visits array to extract master data entities
+     */
+    private function extractMasterData(array $visits)
+    {
+        $data = [
+            'clinics' => [],
+            'departments' => [],
+            'doctors' => []
+        ];
+
+        foreach ($visits as $visit) {
+            if (!empty($visit['clinicCode'])) {
+                $data['clinics'][$visit['clinicCode']] = [
+                    'clinic_code' => $visit['clinicCode'],
+                    'clinic_name' => ($visit['clinicName'] ?? 'Unknown Clinic') ?: 'Unknown Clinic'
+                ];
+            }
+            if (!empty($visit['deptCode'])) {
+                $data['departments'][$visit['deptCode']] = [
+                    'dept_code' => $visit['deptCode'],
+                    'dept_name' => ($visit['deptName'] ?? 'Unknown Dept') ?: 'Unknown Dept'
+                ];
+            }
+            if (!empty($visit['doctCode'])) {
+                $data['doctors'][$visit['doctCode']] = [
+                    'doctor_code' => $visit['doctCode']
+                ];
+            }
+        }
+
+        return $data;
+    }
+
+    /**
+     * Persist master data using a global cache to avoid redundant upserts
+     */
+    private function persistMasterData($type, $data, $uniqueKeys, $updateKeys)
+    {
+        if (empty($data)) return;
+
+        $newItems = [];
+        foreach ($data as $code => $item) {
+            $cacheKey = "master_data_exists_{$type}_{$code}";
+            if (!Cache::has($cacheKey)) {
+                $newItems[] = $item;
+            }
+        }
+
+        if (!empty($newItems)) {
+            try {
+                // Perform upsert outside of any active visit transaction
+                DB::table($type)->upsert($newItems, $uniqueKeys, $updateKeys);
+                
+                // Cache existence for 24 hours to avoid re-upserting in other concurrent jobs
+                foreach ($data as $code => $item) {
+                    Cache::put("master_data_exists_{$type}_{$code}", true, now()->addDay());
+                }
+            } catch (\Exception $e) {
+                Log::warning("[SyncService] Master data upsert failed for $type: " . $e->getMessage());
+            }
+        }
     }
 }

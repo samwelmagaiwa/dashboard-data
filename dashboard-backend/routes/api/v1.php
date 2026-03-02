@@ -40,6 +40,9 @@ Route::prefix('sync')->group(function () {
     Route::get('/enqueue/range', [SyncController::class, 'enqueueSyncRange']);
     Route::get('/batch/{id}', [SyncController::class, 'batchStatus']);
     Route::get('/reaggregate/range', [SyncController::class, 'reaggregateRange']);
+    Route::post('/repair-gaps', [SyncController::class, 'repairGaps']);
+    Route::post('/reset-state', [SyncController::class, 'resetSyncState']);
+    Route::get('/heal-data', [SyncController::class, 'healData']);
     Route::get('/trigger/{date?}', [SyncController::class, 'triggerSync']);
     Route::get('/{date?}', [SyncController::class, 'sync']);
 });

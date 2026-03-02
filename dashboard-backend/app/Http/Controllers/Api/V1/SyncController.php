@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Cache;
 use Carbon\Carbon;
 
 class SyncController extends Controller
@@ -152,6 +153,7 @@ class SyncController extends Controller
     {
         $startDate = $request->query('start_date');
         $endDate = $request->query('end_date');
+        $force = $request->query('force') === 'true';
 
         if (!$startDate || !$endDate) {
             return response()->json(['error' => 'Start date and end date are required'], 400);
@@ -160,11 +162,6 @@ class SyncController extends Controller
         $start = Carbon::parse($startDate);
         $end = Carbon::parse($endDate);
 
-        // Safety limit: prevent enqueueing more than 366 days at once.
-        if ($start->diffInDays($end) > 366) {
-            return response()->json(['error' => 'Range too large. Please enqueue max 1 year at a time.'], 400);
-        }
-
         $dates = [];
         for ($date = $start->copy(); $date->lte($end); $date->addDay()) {
             $dates[] = $date->toDateString();
@@ -172,17 +169,83 @@ class SyncController extends Controller
 
         $jobs = [];
         foreach ($dates as $date) {
-            $jobs[] = new \App\Jobs\SyncForDateJob($date);
+            $jobs[] = new \App\Jobs\SyncForDateJob($date, $force);
         }
 
         $batch = Bus::batch($jobs)
-            ->name("sync:$startDate:$endDate")
+            ->name("sync:$startDate:$endDate" . ($force ? ":force" : ""))
             ->dispatch();
 
         return response()->json([
-            'message' => "Sync enqueued for range $startDate to $endDate (Individual Jobs)",
+            'message' => "Sync enqueued for range $startDate to $endDate (" . count($dates) . " jobs)" . ($force ? " [FORCE]" : ""),
             'batch_id' => $batch->id,
             'total_jobs' => $batch->totalJobs,
+        ], 202);
+    }
+
+    /**
+     * Trigger the data healing process to fix missing names (e.g. Bill Doctor N/A).
+     */
+    public function healData(Request $request)
+    {
+        $date = $request->query('date');
+        
+        $batch = Bus::batch([new \App\Jobs\HealDataJob($date)])
+            ->name("data-healing:" . ($date ?: 'all'))
+            ->dispatch();
+            
+        return response()->json([
+            'message' => "Data healing process started in the background.",
+            'batch_id' => $batch->id
+        ], 202);
+    }
+
+    /**
+     * Force reset all sync states to unblock the UI.
+     */
+    public function resetSyncState()
+    {
+        \App\Models\SyncLog::where('status', 'PENDING')->update(['status' => 'FAILED', 'error_message' => 'Manual Reset']);
+        \App\Models\SyncLog::where('status', 'PROCESSING')->update(['status' => 'FAILED', 'error_message' => 'Manual Reset']);
+        DB::table('job_batches')->whereNull('finished_at')->update(['cancelled_at' => time(), 'finished_at' => time()]);
+        Cache::flush();
+
+        return response()->json(['message' => 'Sync state reset and cache flushed successfully.']);
+    }
+
+    /**
+     * Repair specific gaps by enqueueing sync jobs for provided dates.
+     */
+    public function repairGaps(Request $request)
+    {
+        $dates = $request->input('dates', []);
+        $force = $request->input('force', false);
+        
+        if (empty($dates)) {
+            return response()->json(['error' => 'No dates provided'], 400);
+        }
+
+        $jobs = [];
+        foreach ($dates as $date) {
+            if ($force) {
+                // Remove existing success logs to allow overwrite if forced
+                \App\Models\SyncLog::where('sync_date', $date)
+                    ->where('sync_type', 'visits')
+                    ->delete();
+                
+                // Also clear cache to be sure
+                $this->syncService->clearCacheForDate($date);
+            }
+            $jobs[] = new \App\Jobs\SyncForDateJob($date, $force);
+        }
+
+        $batch = Bus::batch($jobs)
+            ->name("gap-repair:" . count($dates) . "_days")
+            ->dispatch();
+
+        return response()->json([
+            'message' => 'Repair jobs enqueued for ' . count($dates) . ' dates.',
+            'batch_id' => $batch->id,
         ], 202);
     }
 
@@ -191,6 +254,26 @@ class SyncController extends Controller
      */
     public function batchStatus(string $id)
     {
+        // Special case for 'auto' - return a global status if any sync is running
+        if ($id === 'active' || $id === 'global') {
+            $activeSyncs = \App\Models\SyncLog::whereIn('status', ['PROCESSING', 'PENDING'])
+                ->where('updated_at', '>', now()->subMinutes(15))
+                ->count();
+            
+            if ($activeSyncs === 0) {
+                return response()->json(['finished' => true, 'progress' => 100]);
+            }
+
+            // Estimate progress based on recent logs
+            return response()->json([
+                'id' => 'global',
+                'name' => 'Background Sync',
+                'progress' => 0, // We can't easily calculate aggregate progress without a batch
+                'active_tasks' => $activeSyncs,
+                'is_global' => true
+            ]);
+        }
+
         $batch = Bus::findBatch($id);
 
         if (!$batch) {

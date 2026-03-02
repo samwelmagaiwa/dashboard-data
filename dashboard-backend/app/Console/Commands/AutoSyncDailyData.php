@@ -28,21 +28,24 @@ class AutoSyncDailyData extends Command
     public function handle(SyncService $syncService)
     {
         $today = now()->format('Y-m-d');
+        $yesterday = now()->subDay()->format('Y-m-d');
         
-        $this->info("🚀 Dispatching auto-sync job for {$today} to queue...");
-        Log::info("[AutoSync] Dispatching sync job for {$today}");
+        $datesToSync = [$today, $yesterday];
         
-        try {
-            // Dispatch to queue to leverage the 3 active workers
-            \App\Jobs\SyncForDateJob::dispatch($today)->onQueue('default');
+        foreach ($datesToSync as $date) {
+            $this->info("🚀 Dispatching auto-sync job for {$date} to queue...");
+            Log::info("[AutoSync] Dispatching sync job for {$date}");
             
-            $this->info("✅ Job dispatched successfully!");
-            return Command::SUCCESS;
-        } catch (\Exception $e) {
-            $this->error("❌ Failed to dispatch: {$e->getMessage()}");
-            Log::error("[AutoSync] Dispatch failed for {$today}: {$e->getMessage()}");
-            
-            return Command::FAILURE;
+            try {
+                // Dispatch to queue to leverage the 3 active workers
+                \App\Jobs\SyncForDateJob::dispatch($date)->onQueue('default');
+                $this->info("✅ Job for {$date} dispatched successfully!");
+            } catch (\Exception $e) {
+                $this->error("❌ Failed to dispatch for {$date}: {$e->getMessage()}");
+                Log::error("[AutoSync] Dispatch failed for {$date}: {$e->getMessage()}");
+            }
         }
+        
+        return Command::SUCCESS;
     }
 }

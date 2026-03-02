@@ -38,6 +38,8 @@ class DailyDashboardStat extends Model
         'adolescent_count',
         'adult_count',
         'elderly_count',
+        'matched_count',
+        'mismatched_count',
     ];
 
     /**
