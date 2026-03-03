@@ -55,7 +55,7 @@ class DashboardController extends Controller
         }
 
         $comparison = $this->getComparisonPeriod(Carbon::parse($startDate), Carbon::parse($endDate));
-        $cacheKey = $this->cacheKey('dashboard_stats_v2', $startDate, $endDate);
+        $cacheKey = $this->cacheKey('dashboard_stats', $startDate, $endDate);
         $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
@@ -229,7 +229,7 @@ class DashboardController extends Controller
         $startDate = $request->query('start_date', date('Y-m-d'));
         $endDate = $request->query('end_date', date('Y-m-d'));
 
-        $cacheKey = $this->cacheKey('clinic_breakdown_v3', $startDate, $endDate);
+        $cacheKey = $this->cacheKey('clinic_breakdown', $startDate, $endDate);
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
@@ -422,7 +422,7 @@ class DashboardController extends Controller
         $startDate = $request->query('start_date', date('Y-m-d'));
         $endDate = $request->query('end_date', date('Y-m-d'));
 
-        $cacheKey = $this->cacheKey('comparison_radar_v3', $startDate, $endDate);
+        $cacheKey = $this->cacheKey('comp_stats', $startDate, $endDate);
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
