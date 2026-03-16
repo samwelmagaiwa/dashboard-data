@@ -6,23 +6,34 @@ use App\Services\SyncService;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
-class SyncForDateJob implements ShouldQueue
+class SyncForDateJob implements ShouldQueue, ShouldBeUnique
 {
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public $date;
     public $force;
     public $timeout = 600; // 10 minutes per job to be safe
+    public $uniqueFor = 600; // Lock expires after 10 minutes if job crashes
 
     public function __construct($date, $force = false)
     {
         $this->date = $date;
         $this->force = $force;
         $this->onQueue('default');
+    }
+
+    /**
+     * Unique key prevents duplicate jobs for the same date from being queued.
+     */
+    public function uniqueId(): string
+    {
+        return $this->date;
     }
 
     public function handle(SyncService $syncService)
@@ -48,9 +59,18 @@ class SyncForDateJob implements ShouldQueue
         }
 
         $result = $syncService->syncForDateOptimized($this->date);
-        
+
         if (!$result['success']) {
-            throw new \Exception($result['error'] ?? 'Sync failed');
+            $error = $result['error'] ?? 'Sync failed';
+
+            // "Already in progress" is a lock conflict — skip silently, don't retry
+            if (stripos($error, 'already in progress') !== false) {
+                Log::info("[SyncForDateJob] Skipping {$this->date} — sync lock already held by another worker.");
+                return;
+            }
+
+            // Any other real error — fail the job so it appears in failed_jobs
+            throw new \Exception($error);
         }
     }
 }

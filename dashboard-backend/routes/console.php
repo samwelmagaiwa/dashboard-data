@@ -10,4 +10,3 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('sync:auto-daily')->everyTenMinutes();
-Schedule::command('sync:watch')->everyMinute();

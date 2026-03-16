@@ -12,55 +12,47 @@ use Carbon\Carbon;
 
 class SyncWatcher extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
     protected $signature = 'sync:watch';
-
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
     protected $description = 'Lightweight monitor to detect new records in the external API and trigger sync';
 
-    /**
-     * Execute the console command.
-     */
     public function handle()
     {
-        $this->info("🚀 Sync Watcher STARTED. Monitoring HIS API every 5s...");
+        $this->info("🚀 Sync Watcher STARTED. Monitoring HIS API every 10s...");
         $this->info("Press Ctrl+C to stop.");
 
-        // Loop indefinitely for "Immediate" sync experience
-        while(true) {
-            $today = Carbon::today()->format('Y-m-d');
+        while (true) {
+            $today    = Carbon::today()->format('Y-m-d');
             $todayYmd = Carbon::today()->format('Ymd');
-            $baseUrl = env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard');
-            $url = "{$baseUrl}/{$todayYmd}";
+            $baseUrl  = env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard');
+            $url      = "{$baseUrl}/{$todayYmd}";
 
             try {
-                // 1. Get local count for today
-                $localCount = Visit::where('visit_date', $today)->count();
+                // ── Atomic single-instance guard ─────────────────────────────
+                // Only ONE sync:watch process may dispatch at a time (across all terminals)
+                $dispatchLock = Cache::lock('sync_watcher_dispatch_lock', 60);
 
-                // 2. Poll Throttle - don't hit HIS more than once every 5 seconds
-                $lastPollKey = "sync_watcher_last_poll_{$today}";
-                $lastPollValue = Cache::get($lastPollKey);
-                $lastSyncKey = "sync_watcher_last_sync_{$today}";
-                $lastSyncValue = Cache::get($lastSyncKey);
-                
-                $secondsSincePoll = $lastPollValue ? abs(now()->diffInSeconds($lastPollValue)) : 999;
-                $secondsSinceSync = $lastSyncValue ? abs(now()->diffInSeconds($lastSyncValue)) : 999;
-                
-                // Only show output if something interesting happens or every 30s to avoid spam
-                if ($secondsSincePoll >= 30) {
-                    $this->line("[" . now()->toTimeString() . "] ⏱️ Seconds since: Poll={$secondsSincePoll}s, Sync={$secondsSinceSync}s (Local: {$localCount})");
+                if (!$dispatchLock->get()) {
+                    // Another instance is already running its dispatch cycle — skip
+                    $this->line("[" . now()->toTimeString() . "] ⏭️  Another watcher instance is active. Sleeping...");
+                    sleep(10);
+                    continue;
                 }
 
-                if ($secondsSincePoll >= 5) {
-                    // 3. Get external count
+                try {
+                    $localCount = Visit::where('visit_date', $today)->count();
+
+                    // 30-second cooldown per date after a successful dispatch
+                    $lastSyncedAt = Cache::get("sync_watcher_last_sync_{$today}");
+                    $secondsSinceSync = $lastSyncedAt ? abs(now()->diffInSeconds($lastSyncedAt)) : 999;
+
+                    if ($secondsSinceSync < 60) {
+                        $this->line("[" . now()->toTimeString() . "] ⏳ In cooldown ({$secondsSinceSync}s / 60s). Local: {$localCount}");
+                        $dispatchLock->release();
+                        sleep(10);
+                        continue;
+                    }
+
+                    // ── Poll HIS API ─────────────────────────────────────────
                     $username = env('DASHBOARD_API_USERNAME');
                     $password = env('DASHBOARD_API_PASSWORD');
 
@@ -70,29 +62,35 @@ class SyncWatcher extends Command
                         ->get($url);
 
                     if ($response->successful()) {
-                        $data = $response->json();
+                        $data          = $response->json();
                         $externalCount = count($data['data'] ?? []);
-                        
-                        // Record the poll time
-                        Cache::put($lastPollKey, now(), now()->addMinutes(10));
 
                         if ($externalCount > $localCount) {
                             $diff = $externalCount - $localCount;
-                            $this->info("🚩 [" . now()->toTimeString() . "] NEW DATA DETECTED! External: {$externalCount}, Local: {$localCount}. Syncing {$diff} new records...");
+                            $this->info("🚩 [" . now()->toTimeString() . "] NEW DATA: External={$externalCount}, Local={$localCount}. Dispatching sync for +{$diff} records...");
                             Log::info("[SyncWatcher] New records found ({$diff}) for {$today}. Triggering sync.");
-                            
-                            // Trigger the existing sync command
+
                             Artisan::call('sync:auto-daily');
-                            
-                            // Record sync trigger to prevent immediate re-trigger
+
+                            // Set cooldown BEFORE releasing lock so no other instance can sneak in
                             Cache::put("sync_watcher_last_sync_{$today}", now(), now()->addMinutes(10));
-                            Cache::put("sync_watcher_last_local_sent_{$today}", $localCount, now()->addMinutes(10));
-                            
-                            $this->info("✅ Sync dispatched.");
+                            Cache::put("sync_watcher_last_local_{$today}", $externalCount, now()->addMinutes(10));
+
+                            $this->info("✅ Sync dispatched. 60s cooldown active.");
+                        } else {
+                            $this->line("[" . now()->toTimeString() . "] ✔  Up to date. Local={$localCount}, External={$externalCount}");
                         }
+                    } elseif ($response->status() === 401) {
+                        // 401 = HIS session expired — transient, just wait and retry
+                        $this->line("[" . now()->toTimeString() . "] ⚠️  HIS API auth expired (401). Will retry next cycle...");
+                        Log::warning("[SyncWatcher] HIS API returned 401 for {$today}. Credentials may need renewal.");
                     } else {
-                        $this->error("❌ External API unreachable: " . $response->status());
+                        $this->error("❌ External API error: HTTP " . $response->status());
+                        Log::warning("[SyncWatcher] HIS API returned status " . $response->status() . " for {$today}.");
                     }
+                } finally {
+                    // Always release the dispatch lock
+                    $dispatchLock->release();
                 }
 
             } catch (\Exception $e) {
@@ -100,8 +98,7 @@ class SyncWatcher extends Command
                 Log::error("[SyncWatcher] Error: " . $e->getMessage());
             }
 
-            // Sleep for 5 seconds before next check
-            sleep(5);
+            sleep(10);
         }
 
         return Command::SUCCESS;

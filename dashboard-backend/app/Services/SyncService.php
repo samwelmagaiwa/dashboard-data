@@ -190,7 +190,7 @@ class SyncService
                 // 3. Post-sync processing (Aggregated stats & healing)
                 try {
                     $this->updateAggregatedStats($date);
-                    $this->healMissingData($date);
+                    $this->healMissingData($date); // Fast: uses 2 bulk JOIN-UPDATE queries
                 } catch (\Exception $e) {
                     Log::warning("[SyncService] Post-sync processing failed for $date: " . $e->getMessage());
                 }
@@ -616,101 +616,58 @@ class SyncService
     }
 
     /**
-     * "Heal" missing data by looking up names from other records with the same code.
-     * ULTRA-FAST VERSION: Uses bulk updates instead of row-by-row processing.
+     * "Heal" missing data using fast bulk JOIN-UPDATE queries.
+     * Replaces per-code loop (N queries) with 2 total queries regardless of doctor count.
      */
     public function healMissingData($date = null)
     {
         Log::info("[SyncService] Starting Turbo Healing " . ($date ? "for $date" : "for all records"));
         $healedCount = 0;
+        $dateFilter = $date ? "AND v.visit_date = '{$date}'" : "";
 
-        // 1. Build the Billing Doctor Map (Code -> Name)
-        $currentDocCodes = [];
-        if ($date) {
-            $currentDocCodes = DB::table('visits')->where('visit_date', $date)->distinct()->pluck('doct_code')->filter()->toArray();
+        // 1. Heal missing bill_doct_name using a single bulk JOIN-UPDATE
+        // Finds another row with the same doct_code that has a name and copies it
+        $billSql = "UPDATE visits v
+            INNER JOIN (
+                SELECT doct_code, MAX(bill_doct_name) as resolved_name
+                FROM visits
+                WHERE doct_code IS NOT NULL AND doct_code != ''
+                  AND bill_doct_name IS NOT NULL AND bill_doct_name != ''
+                GROUP BY doct_code
+            ) src ON v.doct_code = src.doct_code
+            SET v.bill_doct_name = src.resolved_name, v.updated_at = NOW()
+            WHERE (v.bill_doct_name IS NULL OR v.bill_doct_name = '')
+              AND v.doct_code IS NOT NULL
+              {$dateFilter}";
+
+        try {
+            $healedCount += DB::affectingStatement($billSql);
+        } catch (\Exception $e) {
+            Log::warning("[SyncService] Bill doctor heal failed: " . $e->getMessage());
         }
 
-        $billQuery = DB::table('visits')
-            ->whereNotNull('bill_doct_name')
-            ->where('bill_doct_name', '!=', '')
-            ->whereNotNull('doct_code')
-            ->where('doct_code', '!=', '');
-        
-        if (!empty($currentDocCodes)) {
-            $billQuery->whereIn('doct_code', $currentDocCodes);
-        }
+        // 2. Heal missing cons_doctor_name using the same pattern
+        $consSql = "UPDATE visits v
+            INNER JOIN (
+                SELECT cons_doctor, MAX(cons_doctor_name) as resolved_name
+                FROM visits
+                WHERE cons_doctor IS NOT NULL AND cons_doctor != ''
+                  AND cons_doctor_name IS NOT NULL AND cons_doctor_name != ''
+                GROUP BY cons_doctor
+            ) src ON v.cons_doctor = src.cons_doctor
+            SET v.cons_doctor_name = src.resolved_name, v.updated_at = NOW()
+            WHERE (v.cons_doctor_name IS NULL OR v.cons_doctor_name = '')
+              AND v.cons_doctor IS NOT NULL
+              {$dateFilter}";
 
-        $billMap = $billQuery->select('doct_code', 'bill_doct_name')
-            ->distinct()
-            ->pluck('bill_doct_name', 'doct_code');
-
-        // 2. Build the Consulting Doctor Map (Code -> Name)
-        $currentConsCodes = [];
-        if ($date) {
-            $currentConsCodes = DB::table('visits')->where('visit_date', $date)->distinct()->pluck('cons_doctor')->filter()->toArray();
-        }
-
-        $consQuery = DB::table('visits')
-            ->whereNotNull('cons_doctor_name')
-            ->where('cons_doctor_name', '!=', '')
-            ->whereNotNull('cons_doctor')
-            ->where('cons_doctor', '!=', '');
-            
-        if (!empty($currentConsCodes)) {
-            $consQuery->whereIn('cons_doctor', $currentConsCodes);
-        }
-
-        $consMap = $consQuery->select('cons_doctor', 'cons_doctor_name')
-            ->distinct()
-            ->pluck('cons_doctor_name', 'cons_doctor');
-
-        // 3. Perform Bulk Updates for Billing Doctor Names
-        // Optimization: Only iterate over doctors found in the current date if provided
-        $billCodes = $billMap->keys();
-        if ($date) {
-            $currentDocCodes = DB::table('visits')->where('visit_date', $date)->distinct()->pluck('doct_code')->filter();
-            $billCodes = $billCodes->intersect($currentDocCodes);
-        }
-
-        foreach ($billCodes as $code) {
-            $name = $billMap[$code];
-            if (empty($code)) continue;
-            
-            $query = DB::table('visits')
-                ->where('doct_code', (string)$code)
-                ->where(function($q) {
-                    $q->whereNull('bill_doct_name')->orWhere('bill_doct_name', '');
-                });
-
-            if ($date) $query->where('visit_date', $date);
-
-            $healedCount += $query->update(['bill_doct_name' => $name, 'updated_at' => now()]);
-        }
-
-        // 4. Perform Bulk Updates for Consulting Doctor Names
-        $consCodes = $consMap->keys();
-        if ($date) {
-            $currentConsCodes = DB::table('visits')->where('visit_date', $date)->distinct()->pluck('cons_doctor')->filter();
-            $consCodes = $consCodes->intersect($currentConsCodes);
-        }
-
-        foreach ($consCodes as $code) {
-            $name = $consMap[$code];
-            if (empty($code)) continue;
-
-            $query = DB::table('visits')
-                ->where('cons_doctor', (string)$code)
-                ->where(function($q) {
-                    $q->whereNull('cons_doctor_name')->orWhere('cons_doctor_name', '');
-                });
-
-            if ($date) $query->where('visit_date', $date);
-
-            $healedCount += $query->update(['cons_doctor_name' => $name, 'updated_at' => now()]);
+        try {
+            $healedCount += DB::affectingStatement($consSql);
+        } catch (\Exception $e) {
+            Log::warning("[SyncService] Cons doctor heal failed: " . $e->getMessage());
         }
 
         if ($healedCount > 0) {
-            Log::info("[SyncService] Successfully performed $healedCount bulk heals.");
+            Log::info("[SyncService] Turbo Healing complete. Healed {$healedCount} records with 2 SQL queries.");
         }
 
         return $healedCount;
