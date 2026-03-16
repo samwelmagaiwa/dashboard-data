@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0,shrink-to-fit=no" />
+    <meta name="description" content="MNH-Mloganzila Visualized Dashboard Management System" />
+    <meta name="author" content="Muhimbili National Hospital - Mloganzila ICT Unit" />
+    <title>MNH-Mloganzila | Dashboard Management System</title>
+
+    <!-- Favicons for all devices -->
+    <link rel="icon" href="./src/assets/images/muhilogo.jpg" type="image/jpeg" />
+
+    <!-- Theme handling -->
+    <script>
+      const userMode = localStorage.getItem('coreui-free-vue-admin-template-theme');
+      const systemDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (userMode === 'dark' || (userMode !== 'light' && systemDarkMode)) {
+        document.documentElement.dataset.coreuiTheme = 'dark';
+      }
+    </script>
+  </head>
+  <body>
+    <noscript>
+      <strong>Sorry, this system requires JavaScript to function properly. Please enable it in your browser settings.</strong>
+    </noscript>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

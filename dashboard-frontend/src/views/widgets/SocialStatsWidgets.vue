@@ -1,0 +1,709 @@
+<script setup>
+import { CChart } from '@coreui/vue-chartjs'
+import { CIcon } from '@coreui/icons-vue'
+import {
+  cilBed,
+  cilPeople,
+  cilMedicalCross, // Keeping this as 'cilMedi cilClock' is a syntax error
+  cilClock as cilPending, // Assuming this was the intent for aliasing cilClock
+  cilXCircle,
+  cilChartLine,
+  cilHistory,
+  cilHospital, // Retaining from original, not in instruction's list but seems important
+  cilFile,
+  cilUser, // Retaining from original, not in instruction's list but seems important
+  cilChevronBottom,
+  cilChevronTop,
+} from '@coreui/icons'
+import { useDashboardStore } from '@/stores/dashboard'
+import { ref, watch } from 'vue'
+
+const dashboard = useDashboardStore()
+
+const getValue = (key) => {
+  return (dashboard.realStats?.[key] || 0).toLocaleString()
+}
+
+const getPrevValue = (key) => {
+  return (dashboard.previousStats?.[key] || 0).toLocaleString()
+}
+
+const getTrend = (key) => {
+  const current = dashboard.realStats?.[key] || 0
+  const previous = dashboard.previousStats?.[key] || 0
+  if (!previous) return current > 0 ? 100 : 0
+  const trend = ((current - previous) / previous) * 100
+  return Math.round(trend * 10) / 10
+}
+
+const showPendingList = ref(false)
+const pendingPatients = ref([])
+const isListLoading = ref(false)
+
+const togglePendingList = async () => {
+  showPendingList.value = !showPendingList.value
+  if (showPendingList.value && pendingPatients.value.length === 0) {
+    await fetchPendingPatients()
+  }
+}
+
+const fetchPendingPatients = async () => {
+  isListLoading.value = true
+  try {
+    pendingPatients.value = await dashboard.fetchPendingPatients()
+  } catch (error) {
+    console.error('Error in SocialStatsWidgets:', error)
+  } finally {
+    isListLoading.value = false
+  }
+}
+
+// Refresh list if date range changes and list is open
+watch(
+  () => [
+    dashboard.selectedDay,
+    dashboard.selectedWeek,
+    dashboard.selectedMonth,
+    dashboard.selectedYear,
+    dashboard.selectedRange,
+  ],
+  () => {
+    if (showPendingList.value) {
+      fetchPendingPatients()
+    } else {
+      pendingPatients.value = [] // Clear cache to force refresh on next open
+    }
+  },
+  { deep: true },
+)
+</script>
+
+<template>
+  <div class="metrics-grid mb-0 px-0">
+    <CRow
+      :gutter="3"
+      class="row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-6 g-3 px-0 mx-0 flex-nowrap flex-lg-wrap metrics-row"
+    >
+      <!-- Total OPD -->
+      <CCol class="metric-col">
+        <div
+          class="stat-card premium-shadow shadow-blue"
+          style="border-left: 4px solid #3b82f6; border-top: 1px solid #3b82f6"
+        >
+          <div class="stat-card-header mb-1">
+            <div class="stat-icon-wrapper" style="background-color: rgba(59, 130, 246, 0.15)">
+              <CIcon :icon="cilPeople" class="stat-icon" style="color: #3b82f6" />
+            </div>
+            <div class="stat-main-info">
+              <h3 class="stat-value" style="color: #3b82f6">{{ getValue('total_patients') }}</h3>
+              <span class="stat-label">Total OPD</span>
+            </div>
+          </div>
+          <div
+            v-if="dashboard.compLabel"
+            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+          >
+            <div class="stat-comparison">
+              <span class="prev-value text-muted">{{ getPrevValue('total_patients') }}</span>
+              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
+            </div>
+            <div
+              :class="['trend-pill', getTrend('total_patients') >= 0 ? 'trend-up' : 'trend-down']"
+            >
+              <CIcon
+                :icon="getTrend('total_patients') >= 0 ? cilChevronTop : cilChevronBottom"
+                size="sm"
+              />
+              <span>{{ Math.abs(getTrend('total_patients')) }}%</span>
+            </div>
+          </div>
+        </div>
+      </CCol>
+
+      <!-- Total Emergency -->
+      <CCol class="metric-col">
+        <div
+          class="stat-card premium-shadow emergency-card shadow-red"
+          style="
+            border-left: 4px solid #ff0000;
+            border-top: 1px solid #ff0000;
+            position: relative;
+            overflow: hidden;
+          "
+        >
+          <div class="emergency-glow"></div>
+          <div class="stat-card-header mb-1" style="position: relative; z-index: 2">
+            <div
+              class="stat-icon-wrapper emergency-icon-pulse"
+              style="background-color: rgba(255, 0, 0, 0.15)"
+            >
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                class="stat-icon"
+              >
+                <rect x="10" y="2" width="4" height="20" rx="1" fill="#FF0000" />
+                <rect x="2" y="10" width="20" height="4" rx="1" fill="#FF0000" />
+              </svg>
+            </div>
+            <div class="stat-main-info">
+              <div class="d-flex align-items-center mb-0">
+                <h3 class="stat-value mb-0" style="color: #ff0000">
+                  {{ getValue('emergency_visits') }}
+                </h3>
+              </div>
+              <span class="stat-label">Emergency</span>
+            </div>
+          </div>
+          <div
+            v-if="dashboard.compLabel"
+            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+            style="position: relative; z-index: 2"
+          >
+            <div class="stat-comparison">
+              <span class="prev-value text-muted">{{ getPrevValue('emergency_visits') }}</span>
+              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
+            </div>
+            <div
+              :class="['trend-pill', getTrend('emergency_visits') >= 0 ? 'trend-up' : 'trend-down']"
+            >
+              <CIcon
+                :icon="getTrend('emergency_visits') >= 0 ? cilChevronTop : cilChevronBottom"
+                size="sm"
+              />
+              <span>{{ Math.abs(getTrend('emergency_visits')) }}%</span>
+            </div>
+          </div>
+        </div>
+      </CCol>
+
+      <!-- Total Consulted -->
+      <CCol class="metric-col">
+        <div
+          class="stat-card premium-shadow shadow-orange"
+          style="border-left: 4px solid #f97316; border-top: 1px solid #f97316"
+        >
+          <div class="stat-card-header mb-1">
+            <div class="stat-icon-wrapper" style="background-color: rgba(249, 115, 22, 0.15)">
+              <CIcon :icon="cilFile" class="stat-icon" style="color: #f97316" />
+            </div>
+            <div class="stat-main-info">
+              <h3 class="stat-value" style="color: #f97316">
+                {{ getValue('consulted') }}
+              </h3>
+              <span class="stat-label">Consulted</span>
+            </div>
+          </div>
+          <div
+            v-if="dashboard.compLabel"
+            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+          >
+            <div class="stat-comparison">
+              <span class="prev-value text-muted">{{ getPrevValue('consulted') }}</span>
+              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
+            </div>
+            <div :class="['trend-pill', getTrend('consulted') >= 0 ? 'trend-up' : 'trend-down']">
+              <CIcon
+                :icon="getTrend('consulted') >= 0 ? cilChevronTop : cilChevronBottom"
+                size="sm"
+              />
+              <span>{{ Math.abs(getTrend('consulted')) }}%</span>
+            </div>
+          </div>
+        </div>
+      </CCol>
+
+      <!-- Not Consulted -->
+      <CCol class="metric-col">
+        <div
+          class="stat-card premium-shadow shadow-amber"
+          :class="{ expanded: showPendingList }"
+          style="border-left: 4px solid #fbbf24; border-top: 1px solid #fbbf24"
+        >
+          <div class="stat-card-header mb-1" @click="togglePendingList" style="cursor: pointer">
+            <div class="stat-icon-wrapper" style="background-color: rgba(251, 191, 36, 0.15)">
+              <CIcon :icon="cilPending" class="stat-icon" style="color: #fbbf24" />
+            </div>
+            <div class="stat-main-info">
+              <h3 class="stat-value" style="color: #fbbf24">
+                {{ getValue('pending') }}
+                <CIcon
+                  :icon="showPendingList ? cilChevronTop : cilChevronBottom"
+                  size="sm"
+                  class="ms-1 dropdown-arrow"
+                />
+              </h3>
+              <span class="stat-label">Not Consulted</span>
+            </div>
+          </div>
+          <div
+            v-if="dashboard.compLabel"
+            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+          >
+            <div class="stat-comparison">
+              <span class="prev-value text-muted">{{ getPrevValue('pending') }}</span>
+              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
+            </div>
+            <div :class="['trend-pill', getTrend('pending') <= 0 ? 'trend-up' : 'trend-down']">
+              <CIcon
+                :icon="getTrend('pending') >= 0 ? cilChevronTop : cilChevronBottom"
+                size="sm"
+              />
+              <span>{{ Math.abs(getTrend('pending')) }}%</span>
+            </div>
+          </div>
+
+          <!-- Scrollable Patient List -->
+          <div v-if="showPendingList" class="pending-list-container">
+            <div v-if="isListLoading" class="text-center py-2">
+              <div class="spinner-border spinner-border-sm text-warning" role="status"></div>
+            </div>
+            <div v-else-if="pendingPatients.length === 0" class="no-data-text">
+              No pending patients
+            </div>
+            <div v-else class="patient-list">
+              <div v-for="patient in pendingPatients" :key="patient.id" class="patient-item">
+                <CIcon :icon="cilUser" size="custom-size" :height="10" class="me-1 opacity-50" />
+                <span class="mr-number">{{ patient.mr_number }}</span>
+                <span class="visit-time">{{
+                  patient.cons_time ? patient.cons_time.substring(0, 5) : ''
+                }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </CCol>
+
+      <!-- New Visits -->
+      <CCol class="metric-col">
+        <div
+          class="stat-card premium-shadow shadow-cyan"
+          style="border-left: 4px solid #06b6d4; border-top: 1px solid #06b6d4"
+        >
+          <div class="stat-card-header mb-1">
+            <div class="stat-icon-wrapper" style="background-color: rgba(6, 182, 212, 0.15)">
+              <CIcon :icon="cilClock" class="stat-icon" style="color: #06b6d4" />
+            </div>
+            <div class="stat-main-info">
+              <h3 class="stat-value" style="color: #06b6d4">{{ getValue('new_visits') }}</h3>
+              <span class="stat-label">New Visits</span>
+            </div>
+          </div>
+          <div
+            v-if="dashboard.compLabel"
+            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+          >
+            <div class="stat-comparison">
+              <span class="prev-value text-muted">{{ getPrevValue('new_visits') }}</span>
+              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
+            </div>
+            <div :class="['trend-pill', getTrend('new_visits') >= 0 ? 'trend-up' : 'trend-down']">
+              <CIcon
+                :icon="getTrend('new_visits') >= 0 ? cilChevronTop : cilChevronBottom"
+                size="sm"
+              />
+              <span>{{ Math.abs(getTrend('new_visits')) }}%</span>
+            </div>
+          </div>
+        </div>
+      </CCol>
+
+      <!-- Followups -->
+      <CCol class="metric-col">
+        <div
+          class="stat-card premium-shadow shadow-purple"
+          style="border-left: 4px solid #6610f2; border-top: 1px solid #6610f2"
+        >
+          <div class="stat-card-header mb-1">
+            <div class="stat-icon-wrapper" style="background-color: rgba(102, 16, 242, 0.15)">
+              <CIcon :icon="cilUser" class="stat-icon" style="color: #6610f2" />
+            </div>
+            <div class="stat-main-info">
+              <h3 class="stat-value" style="color: #6610f2">{{ getValue('followups') }}</h3>
+              <span class="stat-label">Follow-ups</span>
+            </div>
+          </div>
+          <div
+            v-if="dashboard.compLabel"
+            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+          >
+            <div class="stat-comparison">
+              <span class="prev-value text-muted">{{ getPrevValue('followups') }}</span>
+              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
+            </div>
+            <div :class="['trend-pill', getTrend('followups') >= 0 ? 'trend-up' : 'trend-down']">
+              <CIcon
+                :icon="getTrend('followups') >= 0 ? cilChevronTop : cilChevronBottom"
+                size="sm"
+              />
+              <span>{{ Math.abs(getTrend('followups')) }}%</span>
+            </div>
+          </div>
+        </div>
+      </CCol>
+    </CRow>
+  </div>
+</template>
+
+<style scoped>
+.footer-value-group {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.stat-percentage {
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.text-muted.stat-percentage {
+  background-color: rgba(108, 117, 125, 0.15);
+}
+
+.dropdown-arrow {
+  transition: transform 0.3s ease;
+  font-size: 0.8rem;
+  vertical-align: middle;
+  opacity: 0.7;
+}
+
+.stat-card.expanded {
+  border-bottom: 3px solid #fbbf24;
+  z-index: 1051; /* Higher than siblings when open */
+}
+
+.stat-card-footer {
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+  line-height: 1;
+}
+
+.stat-main-info {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.stat-value {
+  font-size: 1.8rem; /* Increased from 1.5rem */
+  font-weight: 850;
+  margin-bottom: 0;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.stat-label {
+  font-size: 0.9rem; /* Increased from 0.8rem */
+  font-weight: 750;
+  color: #475569; /* Darker than #64748b for better contrast */
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+.stat-comparison {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.prev-value {
+  font-size: 0.9rem; /* Increased from 0.85rem */
+  font-weight: 700;
+}
+
+.prev-label {
+  font-size: 0.65rem; /* Increased */
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.trend-pill {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border-radius: 12px;
+  font-size: 0.85rem; /* Increased */
+  font-weight: 700;
+}
+
+.trend-up {
+  background-color: rgba(34, 197, 94, 0.1);
+  color: #16a34a;
+}
+
+.trend-down {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+.stat-card {
+  position: relative; /* Base for absolute positioning */
+  transition: all 0.3s ease;
+}
+
+.pending-list-container {
+  position: absolute;
+  top: 100%; /* Position right below the card */
+  left: 0;
+  right: 0;
+  z-index: 1050; /* Bootstrap dropdown level */
+  max-height: 250px;
+  overflow-y: auto;
+  padding: 0.5rem;
+  background: white; /* Solid white to cover backgrounds */
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  box-shadow:
+    0 10px 15px -3px rgba(0, 0, 0, 0.1),
+    0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.patient-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.patient-item {
+  display: flex;
+  align-items: center;
+  font-size: 0.85rem; /* Increased from 0.75rem */
+  font-weight: 600;
+  color: #4b5563;
+  padding: 4px 8px;
+  background: white;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.03);
+}
+
+.mr-number {
+  flex-grow: 1;
+  font-family: 'Monaco', 'Consolas', monospace;
+}
+
+.visit-time {
+  font-size: 0.65rem;
+  color: #9ca3af;
+}
+
+.no-data-text {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  text-align: center;
+  padding: 1rem;
+}
+
+/* Custom Scrollbar */
+.pending-list-container::-webkit-scrollbar {
+  width: 4px;
+}
+.pending-list-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pending-list-container::-webkit-scrollbar-thumb {
+  background: #fbbf24;
+  border-radius: 10px;
+}
+/* Colored Shadow Effects - More pronounced default state */
+.shadow-blue {
+  box-shadow:
+    0 6px 20px -4px rgba(59, 130, 246, 0.4),
+    0 4px 12px -2px rgba(59, 130, 246, 0.2) !important;
+}
+.shadow-blue:hover {
+  box-shadow: 0 12px 30px -5px rgba(59, 130, 246, 0.6) !important;
+}
+
+.shadow-red {
+  box-shadow:
+    0 6px 20px -4px rgba(220, 53, 69, 0.4),
+    0 4px 12px -2px rgba(220, 53, 69, 0.2) !important;
+}
+.shadow-red:hover {
+  box-shadow: 0 12px 30px -5px rgba(220, 53, 69, 0.6) !important;
+}
+
+.shadow-orange {
+  box-shadow:
+    0 6px 20px -4px rgba(249, 115, 22, 0.4),
+    0 4px 12px -2px rgba(249, 115, 22, 0.2) !important;
+}
+.shadow-orange:hover {
+  box-shadow: 0 12px 30px -5px rgba(249, 115, 22, 0.6) !important;
+}
+
+.shadow-amber {
+  box-shadow:
+    0 6px 20px -4px rgba(251, 191, 36, 0.4),
+    0 4px 12px -2px rgba(251, 191, 36, 0.2) !important;
+}
+.shadow-amber:hover {
+  box-shadow: 0 12px 30px -5px rgba(251, 191, 36, 0.6) !important;
+}
+
+.shadow-cyan {
+  box-shadow:
+    0 6px 20px -4px rgba(6, 182, 212, 0.4),
+    0 4px 12px -2px rgba(6, 182, 212, 0.2) !important;
+}
+.shadow-cyan:hover {
+  box-shadow: 0 12px 30px -5px rgba(6, 182, 212, 0.6) !important;
+}
+
+.shadow-purple {
+  box-shadow:
+    0 6px 20px -4px rgba(102, 16, 242, 0.4),
+    0 4px 12px -2px rgba(102, 16, 242, 0.2) !important;
+}
+.shadow-purple:hover {
+  box-shadow: 0 12px 30px -5px rgba(102, 16, 242, 0.6) !important;
+}
+
+/* Emergency Card Enhancements */
+.emergency-card {
+  background: linear-gradient(135deg, #ffffff 0%, #fff5f5 100%);
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.emergency-glow {
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle at center, rgba(220, 53, 69, 0.03) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  background-color: #dc3545;
+  border-radius: 50%;
+  margin-right: 4px;
+  box-shadow: 0 0 0 rgba(220, 53, 69, 0.4);
+  animation: blink 1.5s infinite;
+}
+
+.emergency-icon-pulse {
+  animation: heartbeat 2s infinite ease-in-out;
+}
+
+@keyframes blink {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(220, 53, 69, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(220, 53, 69, 0);
+  }
+}
+
+@keyframes heartbeat {
+  0% {
+    transform: scale(1);
+  }
+  14% {
+    transform: scale(1.1);
+  }
+  28% {
+    transform: scale(1);
+  }
+  42% {
+    transform: scale(1.1);
+  }
+  70% {
+    transform: scale(1);
+  }
+}
+
+/* Metrics Grid */
+.metrics-grid {
+  width: 100%;
+}
+
+.stat-card {
+  height: 100%;
+  padding: 1.25rem 1rem; /* More vertical padding */
+  background: white;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 135px; /* Added min-height for more presence */
+}
+
+.stat-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.stat-icon-wrapper {
+  flex-shrink: 0;
+  width: 44px; /* Enlarged icon wrapper */
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stat-icon {
+  width: 22px; /* Enlarged icon */
+  height: 22px;
+}
+
+.metrics-grid {
+  overflow: visible; /* Allow shadows to show without padding on desktop */
+}
+
+@media (max-width: 991.98px) {
+  .metrics-grid {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 1.5rem; /* Space for shadows only when scrolling */
+    margin-bottom: 0.5rem;
+  }
+
+  .metrics-row {
+    flex-wrap: nowrap !important;
+  }
+}
+
+.metric-col {
+  transition: all 0.3s ease;
+}
+
+.emergency-card:hover {
+  box-shadow: 0 12px 24px rgba(220, 53, 69, 0.15) !important;
+}
+</style>

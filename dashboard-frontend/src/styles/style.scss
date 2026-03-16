@@ -1,0 +1,341 @@
+@use '@coreui/coreui/scss/coreui' as * with (
+  $enable-deprecation-messages: false
+);
+@use '@coreui/chartjs/scss/coreui-chartjs';
+@use 'vendors/simplebar';
+
+body {
+  background-color: var(--cui-tertiary-bg);
+}
+
+.wrapper {
+  width: 100%;
+  padding-inline: var(--cui-sidebar-occupy-start, 0) var(--cui-sidebar-occupy-end, 0);
+  will-change: auto;
+  @include transition(padding 0.15s);
+}
+
+.header > .container-fluid,
+.sidebar-header {
+  min-height: calc(4rem + 1px); // stylelint-disable-line function-disallowed-list
+}
+
+.sidebar-brand-full {
+  margin-left: 3px;
+}
+
+.sidebar-header {
+  .nav-underline-border {
+    --cui-nav-underline-border-link-padding-x: 1rem;
+    --cui-nav-underline-border-gap: 0;
+  }
+
+  .nav-link {
+    display: flex;
+    align-items: center;
+    min-height: calc(4rem + 1px); // stylelint-disable-line function-disallowed-list
+  }
+}
+
+.sidebar-toggler {
+  margin-inline-start: auto;
+}
+
+.sidebar-narrow,
+.sidebar-narrow-unfoldable:not(:hover) {
+  .sidebar-toggler {
+    margin-inline-end: auto;
+  }
+}
+
+.header > .container-fluid + .container-fluid {
+  min-height: 3rem;
+}
+
+.footer {
+  min-height: calc(3rem + 1px); // stylelint-disable-line function-disallowed-list
+  position: sticky;
+  bottom: 0;
+  z-index: 1020;
+  background-color: var(--cui-footer-bg, #fff);
+  border-top: 1px solid var(--cui-border-color, rgba(0, 0, 0, 0.05));
+}
+
+@include color-mode(dark) {
+  body {
+    background-color: var(--cui-dark-bg-subtle);
+  }
+
+  .footer {
+    --cui-footer-bg: var(--cui-body-bg);
+  }
+}
+
+/* Premium Global Styles */
+// Premium Card Styles
+.card {
+  border: none;
+  border-radius: 16px;
+  background: var(--cui-card-bg, #fff);
+  box-shadow: 0 4px 24px 0 rgba(0, 0, 0, 0.05); /* Soft shadow */
+  transition: all 0.3s ease;
+  overflow: hidden;
+
+  &:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1);
+  }
+}
+
+.card-header {
+  background-color: transparent;
+  border-bottom: 1px solid var(--cui-border-color, rgba(0, 0, 0, 0.05));
+  font-weight: 600;
+  color: var(--cui-body-color); /* Adaptive text color */
+  padding: 1.25rem 1.5rem;
+
+  // Keep blue accent only if specifically needed, but body color is safer for dark mode
+  // Or use primary variable
+  &.text-primary {
+    color: var(--cui-primary) !important;
+  }
+}
+
+.card-body {
+  padding: 1.5rem;
+}
+
+// Stat Cards (Beds, Discharges, Attendance)
+.stat-card {
+  background: var(--cui-card-bg, #fff);
+  border-radius: 16px;
+  padding: 1.25rem;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.premium-shadow {
+  box-shadow: 0 4px 24px 0 rgba(0, 0, 0, 0.05);
+  transition: all 0.3s ease;
+  &:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 12px 32px 0 rgba(0, 0, 0, 0.1);
+  }
+}
+
+.stat-card-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.stat-icon-wrapper {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 0.75rem;
+}
+
+.stat-main-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.stat-value {
+  font-size: 1.75rem;
+  font-weight: 800;
+  margin-bottom: 0.1rem;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.stat-label {
+  font-size: 0.85rem;
+  color: var(--cui-text-secondary, #6c757d);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-card-footer {
+  display: flex;
+  align-items: center;
+  background: var(--cui-tertiary-bg, #f8f9fa);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+}
+
+.stat-footer-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.footer-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--cui-text-secondary, #adb5bd);
+  margin-bottom: 2px;
+}
+
+.footer-value {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+// Patient Categories Grid
+.patient-categories-grid {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  margin-bottom: 2rem;
+}
+
+.category-card {
+  background: var(--cui-card-bg, #fff);
+  border-left: 4px solid transparent; // colored via utility class
+  border-radius: 12px;
+  padding: 1.25rem;
+  display: flex;
+  align-items: center;
+}
+
+.category-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 1rem;
+}
+
+.category-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.category-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 0;
+  color: var(--cui-body-color, #212529);
+}
+
+.category-label {
+  font-size: 0.825rem;
+  color: var(--cui-text-secondary, #6c757d);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+// Border Colors
+.border-info {
+  border-color: #39f !important;
+}
+.border-success {
+  border-color: #2eb85c !important;
+}
+.border-primary {
+  border-color: #321fdb !important;
+}
+.border-warning {
+  border-color: #f9b115 !important;
+}
+.border-danger {
+  border-color: #e55353 !important;
+}
+.border-secondary {
+  border-color: #9da5b1 !important;
+}
+.border-dark {
+  border-color: #4f5d73 !important;
+}
+.border-indigo {
+  border-color: #6610f2 !important;
+}
+
+// Soft Background Colors
+.bg-blue-soft {
+  background-color: rgba(50, 31, 219, 0.1);
+}
+.text-blue {
+  color: #321fdb;
+}
+
+.bg-purple-soft {
+  background-color: rgba(111, 66, 193, 0.1);
+}
+.text-purple {
+  color: #6f42c1;
+}
+
+.bg-orange-soft {
+  background-color: rgba(253, 126, 20, 0.1);
+}
+.text-orange {
+  color: #fd7e14;
+}
+
+.bg-info-soft {
+  background-color: rgba(51, 153, 255, 0.1);
+}
+.text-info {
+  color: #3399ff !important;
+}
+
+.bg-success-soft {
+  background-color: rgba(46, 184, 92, 0.1);
+}
+.text-success {
+  color: #2eb85c !important;
+}
+
+.bg-primary-soft {
+  background-color: rgba(50, 31, 219, 0.1);
+}
+.text-primary {
+  color: #321fdb !important;
+}
+
+.bg-warning-soft {
+  background-color: rgba(249, 177, 21, 0.1);
+}
+.text-warning {
+  color: #f9b115 !important;
+}
+
+.bg-danger-soft {
+  background-color: rgba(229, 83, 83, 0.1);
+}
+.text-danger {
+  color: #e55353 !important;
+}
+
+.bg-secondary-soft {
+  background-color: rgba(157, 165, 177, 0.1);
+}
+.text-secondary {
+  color: #9da5b1 !important;
+}
+
+.bg-dark-soft {
+  background-color: rgba(79, 93, 115, 0.1);
+}
+.text-dark {
+  color: #4f5d73 !important;
+}
+
+.bg-indigo-soft {
+  background-color: rgba(102, 16, 242, 0.1);
+}
+.text-indigo {
+  color: #6610f2 !important;
+}

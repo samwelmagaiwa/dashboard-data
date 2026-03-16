@@ -1,0 +1,838 @@
+import { ref, computed, watch } from 'vue'
+import { defineStore } from 'pinia'
+import axios from 'axios'
+import * as XLSX from 'xlsx'
+import avatar1 from '@/assets/images/avatars/1.jpg'
+import avatar2 from '@/assets/images/avatars/2.jpg'
+import avatar3 from '@/assets/images/avatars/3.jpg'
+import avatar4 from '@/assets/images/avatars/4.jpg'
+import avatar5 from '@/assets/images/avatars/5.jpg'
+import avatar6 from '@/assets/images/avatars/6.jpg'
+
+export const useDashboardStore = defineStore('dashboard', () => {
+  const getInitialWeek = () => {
+    const d = new Date()
+    const day = d.getDay()
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+    const start = new Date(d.setDate(diff))
+    const end = new Date(start)
+    end.setDate(start.getDate() + 6)
+    return [start, end]
+  }
+
+  const selectedPeriod = ref('day')
+  const selectedDay = ref(new Date())
+  const selectedWeek = ref(getInitialWeek())
+  const selectedMonth = ref(new Date())
+  const selectedYear = ref(new Date())
+  const selectedRange = ref([new Date(), new Date()])
+  const searchTerm = ref('')
+
+  const realStats = ref(null)
+  const previousStats = ref(null)
+  const compLabel = ref('')
+  const pieStats = ref(null)
+  const genderRadarData = ref(null)
+  const compStats = ref(null)
+  const serviceTrendData = ref({ labels: [], datasets: [] })
+  const referralStats = ref([])
+  const realClinics = ref([])
+  const detailedClinics = ref([])
+  const isLoading = ref(false)
+  const isTrendsLoading = ref(false)
+  const isDetailedLoading = ref(false)
+  const trendStatus = ref('starting')
+  const trendDebug = ref('')
+  const activeBatchId = ref(localStorage.getItem('mnh_active_batch') || null)
+  const syncProgress = ref(0)
+  const gaps = ref([])
+  const gapsLoading = ref(false)
+  const isRepairing = ref(false)
+  const isSyncing = computed(() => !!activeBatchId.value || isRepairing.value)
+  const user = ref(JSON.parse(localStorage.getItem('mnh_user')) || null)
+  const token = ref(localStorage.getItem('mnh_token') || null)
+  const isAuthenticated = computed(() => !!token.value)
+  const dataVersion = ref(null)
+  const lastUpdated = ref(null)
+  const latestVisitId = ref(0)
+  const todayCount = ref(0)
+  const totalCount = ref(0)
+  const pollInterval = ref(5000)
+  const consecutiveNoChanges = ref(0)
+  const futureDateWarning = ref(null)
+  const breakdownMode = ref(false)
+  let pulseTimer = null
+  let initialLoadComplete = false
+
+  const checkForUpdates = async () => {
+    if (isLoading.value || isSyncing.value) return
+    try {
+      const res = await api.get('/dashboard/check-updates', {
+        headers: { 'Cache-Control': 'no-cache' },
+      })
+      const newVersion = res.data.version
+      const newVisitId = res.data.latest_visit_id || 0
+      const newTodayCount = res.data.today_count || 0
+      const newTotalCount = res.data.total_count || 0
+
+      const hasVersionChange = dataVersion.value && dataVersion.value !== newVersion
+      const hasNewVisit = latestVisitId.value > 0 && newVisitId > latestVisitId.value
+      const hasTodayCountChange = todayCount.value > 0 && newTodayCount !== todayCount.value
+      const hasTotalCountChange = totalCount.value > 0 && newTotalCount !== totalCount.value
+
+      if (hasVersionChange || hasNewVisit || hasTodayCountChange || hasTotalCountChange) {
+        consecutiveNoChanges.value = 0
+        pollInterval.value = 5000
+        lastUpdated.value = new Date()
+        fetchStats(true)
+      } else {
+        consecutiveNoChanges.value++
+        if (consecutiveNoChanges.value > 24) {
+          pollInterval.value = Math.min(pollInterval.value + 1000, 15000)
+        }
+      }
+      dataVersion.value = newVersion
+      latestVisitId.value = newVisitId
+      todayCount.value = newTodayCount
+      totalCount.value = newTotalCount
+    } catch (e) {
+      pollInterval.value = Math.min(pollInterval.value + 2000, 30000)
+    }
+  }
+
+  const startPulse = () => {
+    if (pulseTimer) clearTimeout(pulseTimer)
+    const pulse = async () => {
+      await checkForUpdates()
+      pulseTimer = setTimeout(pulse, pollInterval.value)
+    }
+    pulse()
+  }
+
+  const stopPulse = () => {
+    if (pulseTimer) {
+      clearTimeout(pulseTimer)
+      pulseTimer = null
+    }
+  }
+
+  const api = axios.create({
+    baseURL: import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api/v1',
+  })
+
+  api.interceptors.request.use((config) => {
+    if (token.value) {
+      config.headers.Authorization = `Bearer ${token.value}`
+    }
+    return config
+  })
+
+  api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      if (error.response?.status === 401) {
+        logout()
+      }
+      return Promise.reject(error)
+    },
+  )
+
+  const formatDate = (date) => {
+    if (!date) return null
+    try {
+      const d = new Date(date)
+      if (isNaN(d.getTime())) return null
+      const year = d.getFullYear()
+      const month = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `${year}-${month}-${day}`
+    } catch (e) {
+      return null
+    }
+  }
+
+  const calculateDateRange = () => {
+    let start_date = ''
+    let end_date = ''
+
+    switch (selectedPeriod.value) {
+      case 'day':
+        start_date = formatDate(selectedDay.value || new Date())
+        end_date = start_date
+        break
+      case 'week':
+        const wVal = selectedWeek.value
+        let wStart, wEnd
+        if (Array.isArray(wVal) && wVal.length === 2) {
+          ;[wStart, wEnd] = wVal
+        } else if (wVal) {
+          const d = new Date(wVal)
+          const day = d.getDay()
+          const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+          wStart = new Date(d.setDate(diff))
+          wEnd = new Date(wStart)
+          wEnd.setDate(wStart.getDate() + 6)
+        }
+        start_date = formatDate(wStart)
+        end_date = formatDate(wEnd)
+        break
+      case 'month':
+        const mVal = selectedMonth.value
+        let mDate
+        if (mVal && typeof mVal === 'object' && 'month' in mVal) {
+          mDate = new Date(mVal.year, mVal.month, 1)
+        } else {
+          mDate = new Date(mVal || new Date())
+        }
+        const mY = mDate.getFullYear()
+        const mM = mDate.getMonth()
+        start_date = formatDate(new Date(mY, mM, 1))
+        end_date = formatDate(new Date(mY, mM + 1, 0))
+        break
+      case 'year':
+        const yVal = selectedYear.value
+        let yY
+        if (yVal && typeof yVal === 'object' && 'year' in yVal) {
+          yY = yVal.year
+        } else if (yVal instanceof Date) {
+          yY = yVal.getFullYear()
+        } else {
+          yY = yVal || new Date().getFullYear()
+        }
+        start_date = `${yY}-01-01`
+        end_date = `${yY}-12-31`
+        break
+      case 'range':
+        const rVal = selectedRange.value
+        if (Array.isArray(rVal) && rVal.length === 2 && rVal[0] && rVal[1]) {
+          start_date = formatDate(rVal[0])
+          end_date = formatDate(rVal[1])
+        }
+        break
+    }
+    return { start_date, end_date }
+  }
+
+  const isFutureDate = (dateStr) => {
+    if (!dateStr) return false
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const checkDate = new Date(dateStr)
+    checkDate.setHours(0, 0, 0, 0)
+    return checkDate > today
+  }
+
+  const clearSyncStatus = () => {
+    activeBatchId.value = null
+    isRepairing.value = false
+    syncProgress.value = 0
+    localStorage.removeItem('mnh_active_batch')
+  }
+
+  const fetchStats = async (silent = false) => {
+    if (!silent) isLoading.value = true
+    try {
+      const { start_date, end_date } = calculateDateRange()
+
+      if (isFutureDate(start_date) || isFutureDate(end_date)) {
+        futureDateWarning.value = {
+          title: 'Future Date Selected',
+          message: 'Data for future dates is not yet available.',
+          type: 'warning',
+        }
+        realStats.value = null
+        previousStats.value = null
+        compLabel.value = ''
+        realClinics.value = []
+        pieStats.value = null
+        compStats.value = null
+        referralStats.value = []
+        serviceTrendData.value = { labels: [], datasets: [] }
+        return
+      }
+
+      futureDateWarning.value = null
+
+      if (start_date && end_date) {
+        const timestamp = Date.now()
+        if (!silent) isDetailedLoading.value = true
+        // Clear old detailed data ONLY if it's a new range (not a silent refresh)
+        // This forces the UI to use the snapshot totals immediately
+        if (!silent) {
+          detailedClinics.value = []
+        }
+
+        const period = selectedPeriod.value === 'range' ? 'range' : selectedPeriod.value
+        const breakdownParam = breakdownMode.value ? '&breakdown=monthly' : ''
+
+        const { data } = await api.get(
+          `/dashboard/snapshot?start_date=${start_date}&end_date=${end_date}&period=${period}${breakdownParam}&_t=${timestamp}`,
+        )
+
+        realStats.value = data.stats.stats
+        previousStats.value = data.stats.previous_stats
+        compLabel.value = data.stats.compLabel
+        isRepairing.value = !!(data.stats.meta && data.stats.meta.is_syncing)
+
+        realClinics.value = data.clinics
+        pieStats.value = data.pie
+        fetchGenderRadarStats(silent) // Fetch Radar data in parallel
+        fetchDetailedClinics(silent) // Fetch detailed clinic breakdown
+        compStats.value = data.comparison
+        referralStats.value = data.referrals
+
+        if (data.trends && Array.isArray(data.trends.labels)) {
+          serviceTrendData.value = data.trends
+          trendStatus.value = 'success'
+        } else {
+          serviceTrendData.value = { labels: [], datasets: [] }
+          trendStatus.value = 'empty'
+        }
+
+        // Re-attach to active sync batch if not already polling
+        if (data.stats.meta && data.stats.meta.active_batch_id && !activeBatchId.value) {
+          console.log(
+            '[DashboardStore] Re-attaching to active sync:',
+            data.stats.meta.active_batch_id,
+          )
+          activeBatchId.value = data.stats.meta.active_batch_id
+          pollBatchStatus()
+        }
+
+        lastUpdated.value = new Date().toLocaleTimeString()
+
+        if (!initialLoadComplete) {
+          initialLoadComplete = true
+          setTimeout(() => startPulse(), 2000)
+        }
+      }
+    } catch (error) {
+      console.error('[DashboardStore] Error fetching snapshot:', error)
+      trendStatus.value = 'error'
+    } finally {
+      if (!silent) isLoading.value = false
+      isTrendsLoading.value = false
+    }
+  }
+
+  const triggerSync = async (date = null) => {
+    try {
+      const targetDate = date || formatDate(selectedDay.value)
+      const { data } = await api.get(`/sync/trigger/${targetDate}`)
+      return data
+    } catch (error) {
+      console.error('[DashboardStore] Error triggering sync:', error)
+      throw error
+    }
+  }
+
+  let fetchDebounceTimer = null
+  const scheduleFetchStats = () => {
+    if (fetchDebounceTimer) clearTimeout(fetchDebounceTimer)
+    fetchDebounceTimer = setTimeout(() => {
+      fetchStats()
+    }, 250)
+  }
+
+  const login = async (credentials) => {
+    try {
+      const response = await api.post('/login', credentials)
+      if (response.data.status === 'success') {
+        const { user: userData, token: tokenData } = response.data.data
+        user.value = userData
+        token.value = tokenData
+        localStorage.setItem('mnh_user', JSON.stringify(userData))
+        localStorage.setItem('mnh_token', tokenData)
+        return { success: true, user: userData }
+      }
+    } catch (error) {
+      return { success: false, message: 'Invalid credentials' }
+    }
+  }
+
+  const logout = async () => {
+    try {
+      if (token.value) await api.post('/logout')
+    } catch (e) {
+    } finally {
+      user.value = null
+      token.value = null
+      localStorage.removeItem('mnh_user')
+      localStorage.removeItem('mnh_token')
+      window.location.href = '/#/login'
+    }
+  }
+
+  const pollBatchStatus = async () => {
+    if (!activeBatchId.value) return
+    try {
+      const res = await api.get(`/sync/batch/${activeBatchId.value}`)
+      syncProgress.value = res.data.progress
+      if (res.data.finished || res.data.cancelled || res.data.progress >= 100) {
+        activeBatchId.value = null
+        localStorage.removeItem('mnh_active_batch')
+        syncProgress.value = 0
+        fetchStats()
+      } else {
+        // Refresh charts silently while syncing to show partial data
+        fetchStats(true)
+        setTimeout(pollBatchStatus, 3000)
+      }
+    } catch (e) {
+      activeBatchId.value = null
+      localStorage.removeItem('mnh_active_batch')
+      syncProgress.value = 0
+    }
+  }
+
+  watch(activeBatchId, (newId) => {
+    if (newId) localStorage.setItem('mnh_active_batch', newId)
+    else localStorage.removeItem('mnh_active_batch')
+  })
+
+  if (activeBatchId.value) pollBatchStatus()
+
+  const syncCurrentRange = async () => {
+    if (isSyncing.value) return { ok: false, message: 'Sync in progress' }
+    try {
+      const { start_date, end_date } = calculateDateRange()
+      if (!start_date || !end_date) return { ok: false }
+      const enqueueRes = await api.get(
+        `/sync/enqueue/range?start_date=${start_date}&end_date=${end_date}&force=true`,
+      )
+      activeBatchId.value = enqueueRes.data.batch_id
+      syncProgress.value = 0
+      pollBatchStatus()
+      return {
+        ok: true,
+        batch_id: activeBatchId.value,
+        message: enqueueRes.data.message || 'Background sync enqueued',
+      }
+    } catch (error) {
+      throw error
+    }
+  }
+
+  const fetchGenderRadarStats = async (silent = false) => {
+    try {
+      const { start_date, end_date } = calculateDateRange()
+      const { data } = await api.get('/dashboard/gender-radar', {
+        params: { start_date, end_date, _t: Date.now() },
+      })
+      genderRadarData.value = data
+    } catch (error) {
+      console.error('[DashboardStore] Error fetching gender radar:', error)
+    }
+  }
+
+  const fetchPendingPatients = async () => {
+    const { start_date, end_date } = calculateDateRange()
+    try {
+      const response = await api.get('/dashboard/pending-patients', {
+        params: { start_date, end_date, _t: Date.now() },
+      })
+      return response.data.data || []
+    } catch (error) {
+      return []
+    }
+  }
+
+  const fetchDuplicateVisits = async () => {
+    const { start_date, end_date } = calculateDateRange()
+    try {
+      const response = await api.get('/dashboard/duplicated-data', {
+        params: { start_date, end_date, _t: Date.now() },
+      })
+      return response.data.data || []
+    } catch (error) {
+      return []
+    }
+  }
+
+  const fetchDetailedClinics = async (silent = false) => {
+    const { start_date, end_date } = calculateDateRange()
+    if (!silent) isDetailedLoading.value = true
+    try {
+      // Fetch page 1 first — this gives us immediate data and pagination info
+      const response = await api.get('/dashboard/detailed-clinics', {
+        params: { start_date, end_date, per_page: 500, page: 1, _t: Date.now() },
+      })
+      const firstPageData = response.data.data || []
+      const pagination = response.data.pagination
+
+      // Set the first page immediately so the UI shows data
+      detailedClinics.value = firstPageData
+
+      // Load more pages in background, but cap at 10 pages (5,000 rows) for table display
+      // Summary badges use backend snapshot counts, so they are always accurate
+      if (pagination && pagination.last_page > 1) {
+        const maxPages = Math.min(pagination.last_page, 10)
+        const allData = [...firstPageData]
+        for (let page = 2; page <= maxPages; page++) {
+          try {
+            const pageResponse = await api.get('/dashboard/detailed-clinics', {
+              params: { start_date, end_date, per_page: 500, page, _t: Date.now() },
+            })
+            const pageData = pageResponse.data.data || []
+            allData.push(...pageData)
+            detailedClinics.value = [...allData]
+          } catch (pageError) {
+            console.error(`[DashboardStore] Error fetching page ${page}:`, pageError)
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[DashboardStore] Error fetching detailed clinics:', error)
+      // Only clear if not silent - avoid flickering stale data away during update
+      if (!silent) detailedClinics.value = []
+    } finally {
+      isDetailedLoading.value = false
+    }
+  }
+
+  const fetchGaps = async () => {
+    const { start_date, end_date } = calculateDateRange()
+    gapsLoading.value = true
+    try {
+      const response = await api.get('/dashboard/gaps', {
+        params: { start_date, end_date, _t: Date.now() },
+      })
+      gaps.value = response.data.gaps || []
+    } catch (error) {
+      console.error('[DashboardStore] Error fetching gaps:', error)
+    } finally {
+      gapsLoading.value = false
+    }
+  }
+
+  const repairGaps = async (dates, force = false) => {
+    if (!dates || dates.length === 0) return
+    try {
+      const res = await api.post('/sync/repair-gaps', { dates, force })
+      activeBatchId.value = res.data.batch_id
+      syncProgress.value = 0
+      pollBatchStatus()
+      return {
+        ok: true,
+        batch_id: activeBatchId.value,
+        message: res.data.message || 'Gap repair enqueued',
+      }
+    } catch (error) {
+      console.error('[DashboardStore] Error repairing gaps:', error)
+      throw error
+    }
+  }
+
+  const exportToExcel = async () => {
+    const { start_date, end_date } = calculateDateRange()
+    const wb = XLSX.utils.book_new()
+    const titleStyle = { font: { bold: true, sz: 14 } }
+
+    const rangeLabel =
+      start_date === end_date ? `Date: ${start_date}` : `Period: ${start_date} to ${end_date}`
+
+    // ── 1. Summary Stats Sheet ──────────────────────────────────────────────
+    const summaryHeader = [
+      ['MUHIMBILI NATIONAL HOSPITAL (MNH)'],
+      ['DASHBOARD SUMMARY REPORT'],
+      [rangeLabel.toUpperCase()],
+      [], // Spacer
+      ['METRIC', 'VALUE'],
+    ]
+
+    const summaryData = metrics.value.map((m) => [
+      m.title.toUpperCase(),
+      typeof m.value === 'number' ? m.value.toLocaleString() : m.value,
+    ])
+
+    const wsSummary = XLSX.utils.aoa_to_sheet([...summaryHeader, ...summaryData])
+    wsSummary['!cols'] = [{ wch: 40 }, { wch: 20 }]
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary Stats')
+
+    // ── 2. Detailed Clinics Sheet (fetch ALL pages from API) ────────────────
+    isDetailedLoading.value = true
+    let allVisits = []
+    try {
+      // Fetch page 1 to get pagination info
+      const firstPage = await api.get('/dashboard/detailed-clinics', {
+        params: { start_date, end_date, per_page: 5000, export: 1, page: 1, _t: Date.now() },
+      })
+      allVisits = [...(firstPage.data.data || [])]
+      const pagination = firstPage.data.pagination
+
+      if (pagination && pagination.last_page > 1) {
+        // Prepare list of remaining pages
+        const remainingPages = []
+        for (let p = 2; p <= pagination.last_page; p++) {
+          remainingPages.push(p)
+        }
+
+        // Parallelize fetching in batches of 5 to maximize throughput without overloading the server
+        const BATCH_SIZE = 5
+        for (let i = 0; i < remainingPages.length; i += BATCH_SIZE) {
+          const batch = remainingPages.slice(i, i + BATCH_SIZE)
+          console.log(`[Export] Fetching batch of pages: ${batch.join(', ')}...`)
+
+          const batchResults = await Promise.all(
+            batch.map((page) =>
+              api.get('/dashboard/detailed-clinics', {
+                params: { start_date, end_date, per_page: 5000, export: 1, page, _t: Date.now() },
+              }),
+            ),
+          )
+
+          batchResults.forEach((res) => {
+            if (res.data && res.data.data) {
+              allVisits.push(...res.data.data)
+            }
+          })
+        }
+      }
+    } catch (error) {
+      console.error('[Export] Error fetching all detailed clinics:', error)
+      // Fall back to whatever we already have in memory
+      allVisits = detailedClinics.value || []
+    } finally {
+      isDetailedLoading.value = false
+    }
+
+    if (allVisits.length > 0) {
+      const detailedHeader = [
+        ['MUHIMBILI NATIONAL HOSPITAL (MNH)'],
+        ['DETAILED CLINIC VISIT REPORT'],
+        [rangeLabel.toUpperCase()],
+        [], // Spacer
+        [
+          'MR NUMBER',
+          'GENDER',
+          'AGE',
+          'TYPE',
+          'DATE',
+          'TIME',
+          'CASHIER (BILL DOCTOR)',
+          'ATTEND DOCTOR',
+          'CLINIC NAME',
+          'CLINIC CODE',
+          'DIAGNOSIS',
+          'MISMATCH',
+        ],
+      ]
+
+      const detailedRows = allVisits.map((item) => [
+        item.mr_number,
+        item.gender || 'N/A',
+        item.pat_age || 'N/A',
+        item.visit_type === 'N' ? 'NEW' : item.visit_type === 'F' ? 'FOLLOW-UP' : item.visit_type,
+        formatDate(item.visit_date),
+        item.cons_time || 'N/A',
+        (item.bill_doct_name || 'N/A').toUpperCase(),
+        (item.cons_doctor_name || 'N/A').toUpperCase(),
+        (item.clinic_name || 'N/A').toUpperCase(),
+        item.clinic_code || 'N/A',
+        (item.final_diag || item.prov_diag || 'NOT RECORDED').toUpperCase(),
+        item.is_mismatch ? 'YES' : 'NO',
+      ])
+
+      const wsDetailed = XLSX.utils.aoa_to_sheet([...detailedHeader, ...detailedRows])
+      wsDetailed['!cols'] = [
+        { wch: 15 }, // MR Number
+        { wch: 10 }, // Gender
+        { wch: 10 }, // Age
+        { wch: 15 }, // Type
+        { wch: 15 }, // Date
+        { wch: 12 }, // Time
+        { wch: 30 }, // Cashier
+        { wch: 30 }, // Attend Doctor
+        { wch: 35 }, // Clinic Name
+        { wch: 15 }, // Clinic Code
+        { wch: 55 }, // Diagnosis
+        { wch: 12 }, // Mismatch
+      ]
+      XLSX.utils.book_append_sheet(wb, wsDetailed, 'Detailed Clinics')
+    }
+
+    // ── 3. Referral Distribution Sheet ──────────────────────────────────────
+    if (referralStats.value && referralStats.value.length > 0) {
+      const referralHeader = [
+        ['MUHIMBILI NATIONAL HOSPITAL (MNH)'],
+        ['REFERRAL DISTRIBUTION REPORT'],
+        [rangeLabel.toUpperCase()],
+        [], // Spacer
+        ['FACILITY CODE', 'FACILITY NAME', 'TOTAL VISITS'],
+      ]
+
+      const referralRows = referralStats.value.map((item) => [
+        item.code || 'N/A',
+        (item.name || 'N/A').toUpperCase(),
+        item.count || 0,
+      ])
+
+      const wsReferrals = XLSX.utils.aoa_to_sheet([...referralHeader, ...referralRows])
+      wsReferrals['!cols'] = [
+        { wch: 18 }, // Code
+        { wch: 45 }, // Facility
+        { wch: 15 }, // Visits
+      ]
+      XLSX.utils.book_append_sheet(wb, wsReferrals, 'Referrals')
+    }
+
+    const fileName = `MNH_Dashboard_Report_${start_date}_to_${end_date}.xlsx`
+    XLSX.writeFile(wb, fileName)
+  }
+
+  setInterval(
+    () => {
+      if (!isLoading.value && !isSyncing.value) fetchStats(true)
+    },
+    1000 * 60 * 3,
+  )
+
+  watch(
+    [selectedPeriod, selectedDay, selectedWeek, selectedMonth, selectedYear, selectedRange],
+    () => {
+      scheduleFetchStats()
+    },
+    { deep: true },
+  )
+
+  const tableExample = ref([
+    {
+      avatar: { src: avatar1, status: 'success' },
+      user: { name: 'Yiorgos Avraamu', new: true, registered: 'Jan 1, 2023' },
+      country: { name: 'USA', flag: 'cif-us' },
+      usage: { value: 50, period: 'Jun 11, 2023 - Jul 10, 2023', color: 'success' },
+      payment: { name: 'Mastercard', icon: 'cib-cc-mastercard' },
+      activity: '10 sec ago',
+    },
+    {
+      avatar: { src: avatar2, status: 'danger' },
+      user: { name: 'Avram Tarasios', new: false, registered: 'Jan 1, 2023' },
+      country: { name: 'Brazil', flag: 'cif-br' },
+      usage: { value: 22, period: 'Jun 11, 2023 - Jul 10, 2023', color: 'info' },
+      payment: { name: 'Visa', icon: 'cib-cc-visa' },
+      activity: '5 minutes ago',
+    },
+  ])
+
+  const metrics = computed(() => {
+    if (realStats.value) {
+      const s = realStats.value
+      return [
+        { title: 'PUBLIC', value: (s.public || 0).toLocaleString() },
+        { title: 'NHIF', value: (s.nhif_visits || 0).toLocaleString() },
+        { title: 'IPPM - PRIVATE', value: (s.ippm_private || 0).toLocaleString() },
+        { title: 'IPPM - CREDIT', value: (s.ippm_credit || 0).toLocaleString() },
+        { title: 'COST SHARING', value: (s.cost_sharing || 0).toLocaleString() },
+        { title: 'NSSF', value: (s.nssf || 0).toLocaleString() },
+        { title: 'FOREIGNER', value: (s.foreigner || 0).toLocaleString() },
+        { title: 'Total Visits', value: (s.total_visits || 0).toLocaleString() },
+        { title: 'Total OPD Count', value: (s.total_patients || 0).toLocaleString() },
+        { title: 'Total Emergency Count', value: (s.emergency_visits || 0).toLocaleString() },
+        { title: 'Total Consulted Count', value: (s.consulted || 0).toLocaleString() },
+        { title: 'Not Consulted Count', value: (s.pending || 0).toLocaleString() },
+        { title: 'New Visits Count', value: (s.new_visits || 0).toLocaleString() },
+        { title: 'Followups Count', value: (s.followups || 0).toLocaleString() },
+        { title: 'Neonate (0-28d)', value: (s.neonate_count || 0).toLocaleString() },
+        { title: 'Infant (29d-1y)', value: (s.infant_count || 0).toLocaleString() },
+        { title: 'Child (1-12y)', value: (s.child_count || 0).toLocaleString() },
+        { title: 'Adolescent (13-17y)', value: (s.adolescent_count || 0).toLocaleString() },
+        { title: 'Adult (18-59y)', value: (s.adult_count || 0).toLocaleString() },
+        { title: 'Elderly (60y+)', value: (s.elderly_count || 0).toLocaleString() },
+        { title: 'Duplicated Data Count', value: (s.duplicates || 0).toLocaleString() },
+      ]
+    }
+    return []
+  })
+
+  const jumpDate = (direction) => {
+    const delta = direction === 'next' ? 1 : -1
+    switch (selectedPeriod.value) {
+      case 'day':
+        selectedDay.value = new Date(
+          new Date(selectedDay.value).setDate(selectedDay.value.getDate() + delta),
+        )
+        break
+      case 'week':
+        const wBase = Array.isArray(selectedWeek.value) ? selectedWeek.value[0] : selectedWeek.value
+        const newD = new Date(wBase)
+        newD.setDate(newD.getDate() + delta * 7)
+        const day = newD.getDay()
+        const diff = newD.getDate() - day + (day === 0 ? -6 : 1)
+        const mon = new Date(newD.setDate(diff))
+        const sun = new Date(mon)
+        sun.setDate(mon.getDate() + 6)
+        selectedWeek.value = [mon, sun]
+        break
+      case 'month':
+        const mBase = new Date(selectedMonth.value)
+        selectedMonth.value = new Date(mBase.setMonth(mBase.getMonth() + delta))
+        break
+      case 'year':
+        const yBase = new Date(selectedYear.value)
+        selectedYear.value = new Date(yBase.setFullYear(yBase.getFullYear() + delta))
+        break
+    }
+  }
+
+  const resetToToday = () => {
+    selectedDay.value = new Date()
+    selectedWeek.value = getInitialWeek()
+    selectedMonth.value = new Date()
+    selectedYear.value = new Date()
+    selectedRange.value = [new Date(), new Date()]
+  }
+
+  return {
+    selectedPeriod,
+    selectedDay,
+    selectedWeek,
+    selectedMonth,
+    selectedYear,
+    selectedRange,
+    searchTerm,
+    realStats,
+    previousStats,
+    compLabel,
+    pieStats,
+    compStats,
+    serviceTrendData,
+    referralStats,
+    realClinics,
+    detailedClinics,
+    isLoading,
+    isTrendsLoading,
+    fetchStats,
+    syncCurrentRange,
+    isSyncing,
+    syncProgress,
+    user,
+    isAuthenticated,
+    login,
+    logout,
+    startPulse,
+    stopPulse,
+    futureDateWarning,
+    breakdownMode,
+    setBreakdownMode: (e) => {
+      breakdownMode.value = e
+      fetchStats(true)
+    },
+    metrics,
+    jumpDate,
+    resetToToday,
+    fetchPendingPatients,
+    fetchDuplicateVisits,
+    fetchGenderRadarStats,
+    fetchGaps,
+    repairGaps,
+    exportToExcel,
+    gaps,
+    gapsLoading,
+    genderRadarData,
+    fetchDetailedClinics,
+    isDetailedLoading,
+    lastUpdated,
+    clearSyncStatus,
+    triggerSync,
+  }
+})
