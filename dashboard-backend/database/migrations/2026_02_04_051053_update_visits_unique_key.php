@@ -4,7 +4,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration
+return new class extends Migration 
 {
     /**
      * Run the migrations.
@@ -29,7 +29,7 @@ return new class extends Migration
 
         Schema::table('visits', function (Blueprint $table) {
             $indexes = collect(DB::select("SHOW INDEX FROM visits"))->pluck('Key_name');
-            
+
             // Drop old one if it exists
             if ($indexes->contains('visits_mr_number_visit_num_visit_date_clinic_code_unique')) {
                 $table->dropUnique('visits_mr_number_visit_num_visit_date_clinic_code_unique');
@@ -37,7 +37,7 @@ return new class extends Migration
             if ($indexes->contains('visits_mr_number_visit_num_visit_date_unique')) {
                 $table->dropUnique(['mr_number', 'visit_num', 'visit_date']);
             }
-            
+
             // Add new one
             if (!$indexes->contains('visits_encounter_unique')) {
                 $table->unique(['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code'], 'visits_encounter_unique');

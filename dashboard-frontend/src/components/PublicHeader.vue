@@ -160,16 +160,25 @@ onMounted(() => {
         <CButton
           color="warning"
           variant="outline"
-          class="me-2 d-flex align-items-center"
+          class="me-2 d-flex align-items-center position-relative"
           @click="handleSync"
           :disabled="dashboard.isSyncing"
           title="Background Sync"
         >
+          <!-- Small dot if sync is needed -->
+          <span 
+            v-if="dashboard.isSyncNeeded" 
+            class="position-absolute translate-middle p-1 bg-danger border border-light rounded-circle" 
+            style="top: 5px; left: 5px"
+          >
+            <span class="visually-hidden">Sync Needed</span>
+          </span>
+
           <CIcon
             :icon="dashboard.isSyncing ? 'cil-reload' : 'cil-sync'"
             :class="{ 'me-2': true, spinner: dashboard.isSyncing }"
           />
-          {{ dashboard.isSyncing ? 'Syncing...' : 'Sync' }}
+          {{ dashboard.isSyncing ? (dashboard.syncProgress > 0 ? `Syncing ${dashboard.syncProgress}%` : 'Syncing...') : 'Sync' }}
         </CButton>
         <CButton
           color="danger"
@@ -232,7 +241,7 @@ onMounted(() => {
       <div class="d-flex justify-content-between align-items-center mb-1">
         <small class="text-warning fw-bold d-flex align-items-center">
           <CIcon icon="cil-sync" class="me-2 spinner" />
-          Background Syncing...
+          {{ dashboard.syncMessage || 'Background Syncing...' }}
         </small>
         <div class="d-flex align-items-center">
           <small class="text-muted me-3">{{ dashboard.syncProgress }}%</small>
@@ -242,7 +251,7 @@ onMounted(() => {
             variant="outline"
             class="py-0 px-2 fw-bold text-danger border-danger"
             style="font-size: 0.75rem"
-            @click="dashboard.clearSyncStatus()"
+            @click="dashboard.cancelSync()"
           >
             DISMISS
           </CButton>

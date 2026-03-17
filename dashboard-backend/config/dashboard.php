@@ -7,7 +7,7 @@ return [
     |--------------------------------------------------------------------------
     */
 
-    'cache_version' => 4, // Increment this to force-clear stale cache data
+    'cache_version' => 7, // Increment this to force-clear stale cache data
 
     'sync' => [
         'username' => env('DASHBOARD_API_USERNAME'),

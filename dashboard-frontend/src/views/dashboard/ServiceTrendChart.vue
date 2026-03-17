@@ -398,19 +398,24 @@ const chartOptions = computed(() => {
             </div>
           </div>
 
+          <!-- Subtle top-right sync indicator for the card -->
+          <div v-if="dashboard.isSyncing" class="sync-indicator-mini" title="Background syncing in progress...">
+            <div class="spinner-border spinner-border-sm text-primary" style="width: 0.8rem; height: 0.8rem;"></div>
+          </div>
+
           <div
-            v-if="dashboard.isTrendsLoading"
+            v-if="dashboard.isTrendsLoading && (!chartData.labels || chartData.labels.length === 0)"
             class="empty-state d-flex flex-column align-items-center justify-content-center py-5"
             :style="{ height: breakdownEnabled ? '560px' : '460px' }"
           >
             <div class="spinner-border text-primary opacity-25" role="status"></div>
             <p class="mt-3 text-muted small text-uppercase fw-bold letter-spacing-1">
-              Syncing Trends...
+              Loading Trends...
             </p>
           </div>
 
           <div
-            v-else-if="!chartData.labels || chartData.labels.length === 0"
+            v-else-if="(!chartData.labels || chartData.labels.length === 0) && !dashboard.isTrendsLoading"
             class="empty-state d-flex flex-column align-items-center justify-content-center py-5 text-center px-4"
             :style="{ height: breakdownEnabled ? '560px' : '460px' }"
           >
@@ -593,6 +598,21 @@ const chartOptions = computed(() => {
 
 .service-trends-card:hover {
   box-shadow: 0 20px 40px rgba(0, 50, 150, 0.08) !important;
+}
+
+.sync-indicator-mini {
+  position: absolute;
+  top: 15px;
+  right: 20px;
+  z-index: 5;
+  background: white;
+  padding: 6px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 10px rgba(0, 48, 130, 0.1);
+  border: 1px solid rgba(0, 48, 130, 0.05);
 }
 
 .glass-header {

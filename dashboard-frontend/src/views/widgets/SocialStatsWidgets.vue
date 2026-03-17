@@ -5,13 +5,13 @@ import {
   cilBed,
   cilPeople,
   cilMedicalCross, // Keeping this as 'cilMedi cilClock' is a syntax error
-  cilClock as cilPending, // Assuming this was the intent for aliasing cilClock
+  cilClock,
   cilXCircle,
   cilChartLine,
   cilHistory,
-  cilHospital, // Retaining from original, not in instruction's list but seems important
+  cilHospital, 
   cilFile,
-  cilUser, // Retaining from original, not in instruction's list but seems important
+  cilUser, 
   cilChevronBottom,
   cilChevronTop,
 } from '@coreui/icons'
@@ -225,7 +225,7 @@ watch(
         >
           <div class="stat-card-header mb-1" @click="togglePendingList" style="cursor: pointer">
             <div class="stat-icon-wrapper" style="background-color: rgba(251, 191, 36, 0.15)">
-              <CIcon :icon="cilPending" class="stat-icon" style="color: #fbbf24" />
+              <CIcon :icon="cilClock" class="stat-icon" style="color: #fbbf24" />
             </div>
             <div class="stat-main-info">
               <h3 class="stat-value" style="color: #fbbf24">

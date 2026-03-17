@@ -31,19 +31,31 @@ class AutoSyncDailyData extends Command
         $yesterday = now()->subDay()->format('Y-m-d');
         
         $datesToSync = [$today, $yesterday];
-        
+        $jobs = [];
         foreach ($datesToSync as $date) {
-            $this->info("🚀 Dispatching auto-sync job for {$date} to queue...");
-            Log::info("[AutoSync] Dispatching sync job for {$date}");
+            $jobs[] = new \App\Jobs\SyncForDateJob($date);
+        }
+
+        if (!empty($jobs)) {
+            $batchName = 'auto-sync:daily';
             
-            try {
-                // Dispatch to queue to leverage the 3 active workers
-                \App\Jobs\SyncForDateJob::dispatch($date)->onQueue('default');
-                $this->info("✅ Job for {$date} dispatched successfully!");
-            } catch (\Exception $e) {
-                $this->error("❌ Failed to dispatch for {$date}: {$e->getMessage()}");
-                Log::error("[AutoSync] Dispatch failed for {$date}: {$e->getMessage()}");
+            // Prevent duplicate active daily syncs
+            $existing = \Illuminate\Support\Facades\DB::table('job_batches')
+                ->where('name', $batchName)
+                ->whereNull('finished_at')
+                ->whereNull('cancelled_at')
+                ->exists();
+                
+            if ($existing) {
+                $this->warn("⚠️  An active auto-sync is already in progress. Skipping...");
+                return Command::SUCCESS;
             }
+
+            \Illuminate\Support\Facades\Bus::batch($jobs)
+                ->name($batchName)
+                ->dispatch();
+            
+            $this->info("✅ Auto-sync batch dispatched successfully!");
         }
         
         return Command::SUCCESS;

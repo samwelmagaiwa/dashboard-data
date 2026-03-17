@@ -61,11 +61,20 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const consecutiveNoChanges = ref(0)
   const futureDateWarning = ref(null)
   const breakdownMode = ref(false)
+  const isSyncNeeded = ref(false)
+  const lastSyncFinished = ref(false)
+  const isSyncWaiting = ref(false)
+  const isUpToDate = ref(false)
+  const batchesAhead = ref(0)
+  const syncMessage = ref('')
+  const dismissedBatchId = ref(null)
   let pulseTimer = null
   let initialLoadComplete = false
+  let lastSilentRefresh = 0
+  const SILENT_REFRESH_COOLDOWN = 15000 // 15s minimum between silent refreshes
 
   const checkForUpdates = async () => {
-    if (isLoading.value || isSyncing.value) return
+    if (isLoading.value) return
     try {
       const res = await api.get('/dashboard/check-updates', {
         headers: { 'Cache-Control': 'no-cache' },
@@ -84,13 +93,35 @@ export const useDashboardStore = defineStore('dashboard', () => {
         consecutiveNoChanges.value = 0
         pollInterval.value = 5000
         lastUpdated.value = new Date()
-        fetchStats(true)
+        // Silent refresh with cooldown — avoid hammering during background sync
+        const now = Date.now()
+        if (!activeBatchId.value && (now - lastSilentRefresh) > SILENT_REFRESH_COOLDOWN) {
+          lastSilentRefresh = now
+          fetchStats(true)
+        }
       } else {
         consecutiveNoChanges.value++
         if (consecutiveNoChanges.value > 24) {
           pollInterval.value = Math.min(pollInterval.value + 1000, 15000)
         }
       }
+
+      // Only speed up polling when user has an active tracked batch
+      if (activeBatchId.value) {
+        pollInterval.value = 3000
+      }
+      isSyncNeeded.value = res.data.sync_needed || false
+      isUpToDate.value = res.data.is_up_to_date || false
+
+      // Auto-latch to active sync batches (respect user dismissals)
+      if (res.data.is_syncing && res.data.active_batch_id && !activeBatchId.value) {
+        if (res.data.active_batch_id !== dismissedBatchId.value) {
+          activeBatchId.value = res.data.active_batch_id
+          localStorage.setItem('mnh_active_batch', res.data.active_batch_id)
+          pollBatchStatus()
+        }
+      }
+
       dataVersion.value = newVersion
       latestVisitId.value = newVisitId
       todayCount.value = newTodayCount
@@ -223,14 +254,35 @@ export const useDashboardStore = defineStore('dashboard', () => {
   }
 
   const clearSyncStatus = () => {
+    if (activeBatchId.value) {
+      dismissedBatchId.value = activeBatchId.value
+    }
     activeBatchId.value = null
     isRepairing.value = false
     syncProgress.value = 0
+    syncMessage.value = ''
+    isSyncWaiting.value = false
     localStorage.removeItem('mnh_active_batch')
   }
 
+  const cancelSync = async () => {
+    const batchId = activeBatchId.value
+    if (batchId) {
+      try {
+        await api.post(`/sync/cancel-batch/${batchId}`)
+        console.log('[Dashboard] Sync cancelled:', batchId)
+      } catch (e) {
+        console.error('[Dashboard] Failed to cancel batch:', e)
+      }
+    }
+    clearSyncStatus()
+  }
+
   const fetchStats = async (silent = false) => {
-    if (!silent) isLoading.value = true
+    if (!silent) {
+      isLoading.value = true
+      isTrendsLoading.value = true
+    }
     try {
       const { start_date, end_date } = calculateDateRange()
 
@@ -255,10 +307,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
       if (start_date && end_date) {
         const timestamp = Date.now()
-        if (!silent) isDetailedLoading.value = true
-        // Clear old detailed data ONLY if it's a new range (not a silent refresh)
-        // This forces the UI to use the snapshot totals immediately
         if (!silent) {
+          isDetailedLoading.value = true
           detailedClinics.value = []
         }
 
@@ -272,7 +322,6 @@ export const useDashboardStore = defineStore('dashboard', () => {
         realStats.value = data.stats.stats
         previousStats.value = data.stats.previous_stats
         compLabel.value = data.stats.compLabel
-        isRepairing.value = !!(data.stats.meta && data.stats.meta.is_syncing)
 
         realClinics.value = data.clinics
         pieStats.value = data.pie
@@ -363,25 +412,40 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   }
 
+  let lastRefreshedProgress = 0
+
   const pollBatchStatus = async () => {
     if (!activeBatchId.value) return
     try {
       const res = await api.get(`/sync/batch/${activeBatchId.value}`)
+      const prevProgress = syncProgress.value
       syncProgress.value = res.data.progress
+      isSyncWaiting.value = res.data.is_waiting || false
+      syncMessage.value = res.data.message || ''
+
       if (res.data.finished || res.data.cancelled || res.data.progress >= 100) {
+        // Sync complete — final refresh and cleanup
         activeBatchId.value = null
         localStorage.removeItem('mnh_active_batch')
         syncProgress.value = 0
-        fetchStats()
+        syncMessage.value = ''
+        isSyncWaiting.value = false
+        fetchStats(true) // Final refresh with latest data
+        lastRefreshedProgress = 0
       } else {
-        // Refresh charts silently while syncing to show partial data
-        fetchStats(true)
-        setTimeout(pollBatchStatus, 3000)
+        // Refresh UI only when meaningful progress occurs (every ~10%)
+        const progressDelta = res.data.progress - lastRefreshedProgress
+        if (progressDelta >= 10 || (prevProgress === 0 && res.data.progress > 0)) {
+          lastRefreshedProgress = res.data.progress
+          fetchStats(true)
+        }
+        setTimeout(pollBatchStatus, 2000)
       }
     } catch (e) {
       activeBatchId.value = null
       localStorage.removeItem('mnh_active_batch')
       syncProgress.value = 0
+      syncMessage.value = ''
     }
   }
 
@@ -397,6 +461,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
     try {
       const { start_date, end_date } = calculateDateRange()
       if (!start_date || !end_date) return { ok: false }
+      // Reset dismissed batch so new manual sync is always tracked
+      dismissedBatchId.value = null
+      lastRefreshedProgress = 0
       const enqueueRes = await api.get(
         `/sync/enqueue/range?start_date=${start_date}&end_date=${end_date}&force=true`,
       )
@@ -833,6 +900,13 @@ export const useDashboardStore = defineStore('dashboard', () => {
     isDetailedLoading,
     lastUpdated,
     clearSyncStatus,
+    cancelSync,
     triggerSync,
+    isSyncNeeded,
+    lastSyncFinished,
+    isSyncWaiting,
+    batchesAhead,
+    syncMessage,
+    isUpToDate,
   }
 })

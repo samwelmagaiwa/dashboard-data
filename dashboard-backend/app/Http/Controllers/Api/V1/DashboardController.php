@@ -23,7 +23,7 @@ class DashboardController extends Controller
      */
     private function getCacheVersion(): int
     {
-        return config('dashboard.cache_version', 5);
+        return config('dashboard.cache_version', 6);
     }
 
     protected $syncService;
@@ -301,39 +301,45 @@ class DashboardController extends Controller
         $perPage = min((int) $request->query('per_page', 500), $maxPerPage);
         $page = (int) $request->query('page', 1);
 
-        $query = Visit::where('visit_date', '>=', $startDate)
-            ->where('visit_date', '<=', $endDate)
-            ->select([
-                'mr_number',
-                'gender',
-                'pat_age',
-                'visit_type',
-                'visit_date',
-                'cons_time',
-                'doct_code',
-                'bill_doct_name',
-                'cons_doctor',      // Attend Doctor Code
-                'cons_doctor_name', // Attend Doctor Name
-                'clinic_name',
-                'clinic_code',
-                'final_diag',
-                'prov_diag'
+        $cacheKey = $this->cacheKey('detailed_clinics', $startDate, $endDate, (string)$page, (string)$perPage);
+        $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
+        $ttl = $isToday ? 60 : 3600;
+
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate, $perPage, $page) {
+            $query = Visit::where('visit_date', '>=', $startDate)
+                ->where('visit_date', '<=', $endDate)
+                ->select([
+                    'mr_number',
+                    'gender',
+                    'pat_age',
+                    'visit_type',
+                    'visit_date',
+                    'cons_time',
+                    'doct_code',
+                    'bill_doct_name',
+                    'cons_doctor',      // Attend Doctor Code
+                    'cons_doctor_name', // Attend Doctor Name
+                    'clinic_name',
+                    'clinic_code',
+                    'final_diag',
+                    'prov_diag'
+                ]);
+
+            $paginated = $query->orderBy('clinic_name', 'asc')
+                ->orderBy('visit_date', 'desc')
+                ->paginate($perPage, ['*'], 'page', $page);
+
+            return response()->json([
+                'status' => 'success',
+                'data' => $paginated->items(),
+                'pagination' => [
+                    'current_page' => $paginated->currentPage(),
+                    'last_page' => $paginated->lastPage(),
+                    'per_page' => $paginated->perPage(),
+                    'total' => $paginated->total(),
+                ]
             ]);
-
-        $paginated = $query->orderBy('clinic_name', 'asc')
-            ->orderBy('visit_date', 'desc')
-            ->paginate($perPage, ['*'], 'page', $page);
-
-        return response()->json([
-            'status' => 'success',
-            'data' => $paginated->items(),
-            'pagination' => [
-                'current_page' => $paginated->currentPage(),
-                'last_page' => $paginated->lastPage(),
-                'per_page' => $paginated->perPage(),
-                'total' => $paginated->total(),
-            ]
-        ]);
+        });
     }
 
     /**
@@ -391,7 +397,7 @@ class DashboardController extends Controller
                 ->selectRaw('SUM(total_visits) as total, SUM(neonate_count) as neonate, SUM(infant_count) as infant, SUM(child_count) as child, SUM(adolescent_count) as adolescent, SUM(adult_count) as adult, SUM(elderly_count) as elderly')
                 ->first();
 
-            return [
+            $result = [
                 'gender' => [
                     'male' => (int)($genderStats->male ?? 0),
                     'female' => (int)($genderStats->female ?? 0),
@@ -411,6 +417,15 @@ class DashboardController extends Controller
                     'elderly' => (int)($ageStats->elderly ?? 0),
                 ]
             ];
+
+            \Illuminate\Support\Facades\Log::info("[Dashboard] getPieStats result", [
+                'start' => $startDate,
+                'end' => $endDate,
+                'gender_total' => array_sum($result['gender']),
+                'age_total' => array_sum($result['age_groups'])
+            ]);
+
+            return $result;
         });
     }
 
@@ -869,30 +884,29 @@ class DashboardController extends Controller
             $endDate = $startDate;
         }
 
-        \Illuminate\Support\Facades\Log::info("[Dashboard] Fetching pending patients", [
-            'start' => $startDate,
-            'end' => $endDate
-        ]);
+        $cacheKey = $this->cacheKey('pending_patients', $startDate, $endDate);
+        $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
+        $ttl = $isToday ? 30 : 600;
 
-        $patients = Visit::where('visit_date', '>=', $startDate)
-            ->where('visit_date', '<=', $endDate)
-            ->where(function($q) {
-                $q->where('visit_status', '!=', 'C')
-                  ->orWhereNull('visit_status');
-            })
-            ->select('id', 'mr_number', 'visit_date', 'cons_time')
-            ->orderBy('visit_date', 'asc')
-            ->orderBy('cons_time', 'asc')
-            ->orderBy('id', 'asc')
-            ->limit(200)
-            ->get();
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
+            $patients = Visit::where('visit_date', '>=', $startDate)
+                ->where('visit_date', '<=', $endDate)
+                ->where(function($q) {
+                    $q->where('visit_status', '!=', 'C')
+                      ->orWhereNull('visit_status');
+                })
+                ->select('id', 'mr_number', 'visit_date', 'cons_time')
+                ->orderBy('visit_date', 'asc')
+                ->orderBy('cons_time', 'asc')
+                ->orderBy('id', 'asc')
+                ->limit(200)
+                ->get();
 
-        \Illuminate\Support\Facades\Log::info("[Dashboard] Found pending patients: " . $patients->count());
-
-        return response()->json([
-            'status' => 'success',
-            'data' => $patients
-        ]);
+            return response()->json([
+                'status' => 'success',
+                'data' => $patients
+            ]);
+        });
     }
 
     /**
@@ -919,50 +933,51 @@ class DashboardController extends Controller
             $endDate = $startDate;
         }
 
-        \Illuminate\Support\Facades\Log::info("[Dashboard] Fetching duplicates normalized", [
-            'start' => $startDate,
-            'end' => $endDate
-        ]);
+        $cacheKey = $this->cacheKey('duplicate_visits', $startDate, $endDate);
+        $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
+        $ttl = $isToday ? 600 : 3600;
 
-        $duplicates = \App\Models\DuplicateVisit::select([
-                'mr_number',
-                'visit_num',
-                'visit_date',
-                'clinic_code',
-                'clinic_name',
-                'cons_time',
-                'cons_no',
-                'dept_code',
-                'dept_name',
-                'cons_doctor',
-                'pat_catg_nm',
-                \Illuminate\Support\Facades\DB::raw('COUNT(*) as occurrence_count'),
-                \Illuminate\Support\Facades\DB::raw('MAX(synchronized_at) as latest_sync_at')
-            ])
-            ->where('visit_date', '>=', $startDate)
-            ->where('visit_date', '<=', $endDate)
-            ->groupBy([
-                'mr_number',
-                'visit_num',
-                'visit_date',
-                'clinic_code',
-                'clinic_name',
-                'cons_time',
-                'cons_no',
-                'dept_code',
-                'dept_name',
-                'cons_doctor',
-                'pat_catg_nm'
-            ])
-            ->orderBy('occurrence_count', 'desc')
-            ->orderBy('visit_date', 'desc')
-            ->limit(300)
-            ->get();
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
+            $duplicates = \App\Models\DuplicateVisit::select([
+                    'mr_number',
+                    'visit_num',
+                    'visit_date',
+                    'clinic_code',
+                    'clinic_name',
+                    'cons_time',
+                    'cons_no',
+                    'dept_code',
+                    'dept_name',
+                    'cons_doctor',
+                    'pat_catg_nm',
+                    \Illuminate\Support\Facades\DB::raw('COUNT(*) as occurrence_count'),
+                    \Illuminate\Support\Facades\DB::raw('MAX(synchronized_at) as latest_sync_at')
+                ])
+                ->where('visit_date', '>=', $startDate)
+                ->where('visit_date', '<=', $endDate)
+                ->groupBy([
+                    'mr_number',
+                    'visit_num',
+                    'visit_date',
+                    'clinic_code',
+                    'clinic_name',
+                    'cons_time',
+                    'cons_no',
+                    'dept_code',
+                    'dept_name',
+                    'cons_doctor',
+                    'pat_catg_nm'
+                ])
+                ->orderBy('occurrence_count', 'desc')
+                ->orderBy('visit_date', 'desc')
+                ->limit(300)
+                ->get();
 
-        return response()->json([
-            'status' => 'success',
-            'data' => $duplicates
-        ]);
+            return response()->json([
+                'status' => 'success',
+                'data' => $duplicates
+            ]);
+        });
     }
 
     /**
@@ -982,6 +997,14 @@ class DashboardController extends Controller
         
         // Get total overall visit count (detects any changes)
         $totalVisitCount = (int) Visit::count();
+
+        // Get external count from SyncWatcher cache
+        $externalCount = (int) Cache::get("sync_watcher_external_count_{$today}", 0);
+        
+        // If externalCount is 0, it might mean the watcher hasn't run yet or returned 0
+        // If it's valid, use it to detect mismatches
+        $syncNeeded = ($externalCount > $todayVisitCount);
+        $isUpToDate = ($externalCount > 0 && $externalCount <= $todayVisitCount);
         
         // Get the latest sync timestamp from aggregated stats
         $latestStat = DailyDashboardStat::select('updated_at')
@@ -994,13 +1017,36 @@ class DashboardController extends Controller
         $statTimestamp = $latestStat ? $latestStat->updated_at->timestamp : 0;
         $clinicTimestamp = $latestClinic ? $latestClinic->updated_at->timestamp : 0;
         
+        // Check if a sync is currently active in the queue (excluding background auto-syncs)
+        $activeBatch = DB::table('job_batches')
+            ->whereNull('finished_at')
+            ->whereNull('cancelled_at')
+            ->where('name', 'NOT LIKE', 'auto-sync:%')
+            ->latest('created_at')
+            ->first();
+        
+        $isSyncing = ($activeBatch !== null);
+        
+        // Background batch for silent tracking if no manual batch is active
+        $backgroundBatch = null;
+        if (!$isSyncing) {
+            $backgroundBatch = DB::table('job_batches')
+                ->whereNull('finished_at')
+                ->whereNull('cancelled_at')
+                ->where('name', 'LIKE', 'auto-sync:%')
+                ->latest('created_at')
+                ->first();
+        }
+        
         // Combine all signals into a version hash
         $version = md5(
             $latestVisitId . '_' .
             $todayVisitCount . '_' .
             $totalVisitCount . '_' .
             $statTimestamp . '_' .
-            $clinicTimestamp
+            $clinicTimestamp . '_' .
+            $externalCount . '_' .
+            ($isSyncing ? '1' : '0')
         );
 
         return response()->json([
@@ -1008,6 +1054,12 @@ class DashboardController extends Controller
             'latest_visit_id' => $latestVisitId,
             'today_count' => $todayVisitCount,
             'total_count' => $totalVisitCount,
+            'external_count' => $externalCount,
+            'sync_needed' => $syncNeeded,
+            'is_up_to_date' => $isUpToDate,
+            'is_syncing' => $isSyncing,
+            'active_batch_id' => $activeBatch ? $activeBatch->id : ($backgroundBatch ? $backgroundBatch->id : null),
+            'is_silent_sync' => (!$isSyncing && $backgroundBatch !== null),
             'stat_updated' => $statTimestamp,
             'clinic_updated' => $clinicTimestamp,
             'timestamp' => now()->toDateTimeString(),

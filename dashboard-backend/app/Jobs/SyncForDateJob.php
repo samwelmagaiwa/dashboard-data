@@ -20,12 +20,20 @@ class SyncForDateJob implements ShouldQueue, ShouldBeUnique
     public $force;
     public $timeout = 600; // 10 minutes per job to be safe
     public $uniqueFor = 600; // Lock expires after 10 minutes if job crashes
+    public $tries = 3;
+    public $backoff = [30, 60, 120];
 
     public function __construct($date, $force = false)
     {
         $this->date = $date;
         $this->force = $force;
-        $this->onQueue('default');
+        
+        // If not already explicitly set (e.g. by batch onQueue), 
+        // default to high for today/yesterday.
+        if (!$this->queue) {
+            $isPriority = ($date === now()->format('Y-m-d') || $date === now()->subDay()->format('Y-m-d'));
+            $this->onQueue($isPriority ? 'high' : 'default');
+        }
     }
 
     /**

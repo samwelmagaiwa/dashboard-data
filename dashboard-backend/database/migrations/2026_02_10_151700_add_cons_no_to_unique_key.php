@@ -5,7 +5,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
 
-return new class extends Migration
+return new class extends Migration 
 {
     /**
      * Run the migrations.
@@ -36,16 +36,16 @@ return new class extends Migration
 
         Schema::table('visits', function (Blueprint $table) {
             $indexes = collect(DB::select("SHOW INDEX FROM visits"))->pluck('Key_name');
-            
+
             // Drop old unique constraint
             if ($indexes->contains('visits_encounter_unique')) {
                 $table->dropUnique('visits_encounter_unique');
             }
-            
+
             // Add new unique constraint including cons_no
             // This allows: same patient + same clinic + same day + DIFFERENT cons_no = separate visits
             $table->unique(
-                ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code', 'cons_no'], 
+            ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code', 'cons_no'],
                 'visits_encounter_unique'
             );
         });
@@ -59,7 +59,7 @@ return new class extends Migration
         Schema::table('visits', function (Blueprint $table) {
             $table->dropUnique('visits_encounter_unique');
             $table->unique(
-                ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code'], 
+            ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code'],
                 'visits_encounter_unique'
             );
         });

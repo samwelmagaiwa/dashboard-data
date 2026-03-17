@@ -371,12 +371,14 @@ const polarPlugins = [
           </h6>
         </div>
         <div class="card-body p-0" style="min-height: 450px; height: 450px">
-          <div
-            v-if="dashboard.isSyncing && ageGroupChartData.labels[0] === 'No Data'"
-            class="d-flex flex-column align-items-center justify-content-center h-100 text-center text-primary"
-          >
-            <div class="spinner-border spinner-border-sm mb-2" role="status"></div>
-            <p class="mb-0 fw-bold">Syncing...</p>
+          <!-- Subtle top-right sync indicator for the card -->
+          <div v-if="dashboard.isSyncing" class="sync-indicator-mini" title="Background syncing in progress...">
+            <div class="spinner-border spinner-border-sm text-primary" style="width: 0.8rem; height: 0.8rem;"></div>
+          </div>
+
+          <div v-if="ageGroupChartData.labels[0] === 'No Data' && !dashboard.isLoading" 
+               class="d-flex align-items-center justify-content-center h-100 text-center text-muted">
+            <p class="mb-0">No Data Available</p>
           </div>
           <div v-else style="height: 100%; width: 100%">
             <CChart
@@ -444,3 +446,19 @@ const polarPlugins = [
     </div>
   </div>
 </template>
+
+<style scoped>
+.sync-indicator-mini {
+  position: absolute;
+  top: 10px;
+  right: 15px;
+  z-index: 5;
+  background: rgba(255, 255, 255, 0.8);
+  padding: 4px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+</style>

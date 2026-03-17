@@ -43,7 +43,6 @@ let syncInterval = null
 
 onMounted(() => {
   dashboard.fetchStats()
-  dashboard.startPulse() // Start real-time polling
 
   // Trigger background sync every 5 minutes for admin users
   // (Actual data refresh is handled by store's adaptive polling)

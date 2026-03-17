@@ -5,7 +5,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\DB;
 
-return new class extends Migration
+return new class extends Migration 
 {
     /**
      * Run the migrations.
@@ -42,16 +42,16 @@ return new class extends Migration
 
         Schema::table('visits', function (Blueprint $table) {
             $indexes = collect(DB::select("SHOW INDEX FROM visits"))->pluck('Key_name');
-            
+
             // Drop old unique key if it exists
             if ($indexes->contains('visits_encounter_unique')) {
                 $table->dropUnique('visits_encounter_unique');
             }
-            
+
             // Create new unique key including cons_no
             // This ensures each consultation is stored separately
             $table->unique(
-                ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code', 'cons_no'], 
+            ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code', 'cons_no'],
                 'visits_encounter_unique'
             );
         });
@@ -64,15 +64,15 @@ return new class extends Migration
     {
         Schema::table('visits', function (Blueprint $table) {
             $indexes = collect(DB::select("SHOW INDEX FROM visits"))->pluck('Key_name');
-            
+
             // Drop the new unique key
             if ($indexes->contains('visits_encounter_unique')) {
                 $table->dropUnique('visits_encounter_unique');
             }
-            
+
             // Restore old unique key (without cons_no)
             $table->unique(
-                ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code'], 
+            ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code'],
                 'visits_encounter_unique'
             );
         });

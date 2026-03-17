@@ -20,7 +20,7 @@ class SyncService
 {
     private function getCacheVersion(): int
     {
-        return config('dashboard.cache_version', 4);
+        return config('dashboard.cache_version', 7);
     }
 
     protected static $cachedClinics = [];
@@ -65,6 +65,8 @@ class SyncService
             // RANGE Snapshot caches (Month/Year)
             "dashboard_snapshot_{$monthStart}_{$monthEnd}_month_none_v{$v}",
             "dashboard_snapshot_{$yearStart}_{$yearEnd}_year_none_v{$v}",
+            "dashboard_snapshot_{$monthStart}_{$monthEnd}_month_monthly_v{$v}",
+            "dashboard_snapshot_{$yearStart}_{$yearEnd}_year_monthly_v{$v}",
         ];
 
         foreach ($keysToForget as $key) {
@@ -144,9 +146,9 @@ class SyncService
             $password = config('dashboard.sync.password', env('DASHBOARD_API_PASSWORD'));
 
             $response = Http::withBasicAuth($username, $password)
-                ->connectTimeout(5)
-                ->timeout(15)
-                ->retry(1, 250)
+                ->connectTimeout(10)
+                ->timeout(60)
+                ->retry(3, 1000)
                 ->get($url);
 
             if ($response->successful()) {
@@ -300,8 +302,8 @@ class SyncService
                 COUNT(*) as total_visits,
                 SUM(CASE WHEN visit_status = "C" THEN 1 ELSE 0 END) as consulted,
                 SUM(CASE WHEN (visit_status IS NULL OR visit_status != "C") THEN 1 ELSE 0 END) as pending,
-                SUM(CASE WHEN TRIM(visit_type) = "N" THEN 1 ELSE 0 END) as new_visits,
-                SUM(CASE WHEN TRIM(visit_type) = "F" THEN 1 ELSE 0 END) as followups,
+                SUM(CASE WHEN visit_type = "N" THEN 1 ELSE 0 END) as new_visits,
+                SUM(CASE WHEN visit_type = "F" THEN 1 ELSE 0 END) as followups,
                 SUM(CASE WHEN is_nhif = "Y" THEN 1 ELSE 0 END) as nhif_visits,
                 SUM(CASE WHEN pat_catg = "016" THEN 1 ELSE 0 END) as foreigner,
                 SUM(CASE WHEN pat_catg = "001" THEN 1 ELSE 0 END) as public,
@@ -312,7 +314,7 @@ class SyncService
                 SUM(CASE WHEN dept_code = "150" THEN 1 ELSE 0 END) as emergency,
                 SUM(CASE WHEN gender = "M" THEN 1 ELSE 0 END) as male,
                 SUM(CASE WHEN gender = "F" THEN 1 ELSE 0 END) as female,
-                SUM(CASE WHEN (gender IS NOT NULL AND gender != "M" AND gender != "F") THEN 1 ELSE 0 END) as no_gender,
+                SUM(CASE WHEN gender = "N" THEN 1 ELSE 0 END) as no_gender,
                 SUM(CASE WHEN gender IS NULL THEN 1 ELSE 0 END) as unknown_gender,
                 SUM(CASE WHEN pat_age IS NOT NULL AND (
                     (pat_age LIKE "%.%.%" AND CAST(SUBSTRING_INDEX(pat_age, ".", 1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(pat_age, ".", 2), ".", -1) AS UNSIGNED) = 0 AND CAST(SUBSTRING_INDEX(pat_age, ".", -1) AS UNSIGNED) BETWEEN 0 AND 28) OR
@@ -460,14 +462,14 @@ class SyncService
         $duplicateRecords = []; // NEW: Fix undefined variable
 
         foreach ($visits as $index => $visitData) {
-            // Trim and validate all incoming fields
-            $cleanData = collect($visitData)->map(function ($value) {
+            // Trim and validate all incoming fields using faster native array_map
+            $cleanData = array_map(function ($value) {
                 if (is_string($value)) {
                     $v = trim($value);
                     return $v === '' ? null : $v;
                 }
                 return $value;
-            })->all();
+            }, $visitData);
 
             $visitDateOrig = $cleanData['visitDate'] ?? null;
             if (!$visitDateOrig) {
@@ -483,12 +485,12 @@ class SyncService
             // Format dates
             $visitDate = $visitDateOrig;
             if (strlen($visitDate) === 8 && is_numeric($visitDate)) {
-                 $visitDate = Carbon::createFromFormat('Ymd', $visitDate)->toDateString();
+                 $visitDate = substr($visitDate, 0, 4) . '-' . substr($visitDate, 4, 2) . '-' . substr($visitDate, 6, 2);
             }
 
             $doctConsDt = $cleanData['doctConsDt'] ?? null;
             if ($doctConsDt && strlen($doctConsDt) === 8 && is_numeric($doctConsDt)) {
-                 $doctConsDt = Carbon::createFromFormat('Ymd', $doctConsDt)->toDateString();
+                 $doctConsDt = substr($doctConsDt, 0, 4) . '-' . substr($doctConsDt, 4, 2) . '-' . substr($doctConsDt, 6, 2);
             }
 
             // Category logic
@@ -615,59 +617,70 @@ class SyncService
         return count($preparedVisits);
     }
 
-    /**
-     * "Heal" missing data using fast bulk JOIN-UPDATE queries.
-     * Replaces per-code loop (N queries) with 2 total queries regardless of doctor count.
-     */
     public function healMissingData($date = null)
     {
-        Log::info("[SyncService] Starting Turbo Healing " . ($date ? "for $date" : "for all records"));
+        Log::info("[SyncService] Starting Surgical Healing " . ($date ? "for $date" : "for all records"));
         $healedCount = 0;
-        $dateFilter = $date ? "AND v.visit_date = '{$date}'" : "";
+        $v = $this->getCacheVersion();
 
-        // 1. Heal missing bill_doct_name using a single bulk JOIN-UPDATE
-        // Finds another row with the same doct_code that has a name and copies it
-        $billSql = "UPDATE visits v
-            INNER JOIN (
-                SELECT doct_code, MAX(bill_doct_name) as resolved_name
-                FROM visits
-                WHERE doct_code IS NOT NULL AND doct_code != ''
-                  AND bill_doct_name IS NOT NULL AND bill_doct_name != ''
-                GROUP BY doct_code
-            ) src ON v.doct_code = src.doct_code
-            SET v.bill_doct_name = src.resolved_name, v.updated_at = NOW()
-            WHERE (v.bill_doct_name IS NULL OR v.bill_doct_name = '')
-              AND v.doct_code IS NOT NULL
-              {$dateFilter}";
+        // 1. Resolve Bill Doctor Names
+        $targetCodes = Visit::where(function($q) {
+                $q->whereNull('bill_doct_name')->orWhere('bill_doct_name', '');
+            })
+            ->whereNotNull('doct_code')
+            ->where('doct_code', '!=', '')
+            ->when($date, fn($q) => $q->where('visit_date', $date))
+            ->distinct()
+            ->pluck('doct_code');
 
-        try {
-            $healedCount += DB::affectingStatement($billSql);
-        } catch (\Exception $e) {
-            Log::warning("[SyncService] Bill doctor heal failed: " . $e->getMessage());
+        if ($targetCodes->isNotEmpty()) {
+            foreach ($targetCodes->chunk(100) as $chunk) {
+                $mappings = Visit::whereIn('doct_code', $chunk)
+                    ->whereNotNull('bill_doct_name')
+                    ->where('bill_doct_name', '!=', '')
+                    ->select('doct_code', DB::raw('MAX(bill_doct_name) as name'))
+                    ->groupBy('doct_code')
+                    ->pluck('name', 'doct_code');
+
+                foreach ($mappings as $code => $name) {
+                    $healedCount += Visit::where('doct_code', $code)
+                        ->where(function($q) { $q->whereNull('bill_doct_name')->orWhere('bill_doct_name', ''); })
+                        ->when($date, fn($q) => $q->where('visit_date', $date))
+                        ->update(['bill_doct_name' => $name, 'updated_at' => now()]);
+                }
+            }
         }
 
-        // 2. Heal missing cons_doctor_name using the same pattern
-        $consSql = "UPDATE visits v
-            INNER JOIN (
-                SELECT cons_doctor, MAX(cons_doctor_name) as resolved_name
-                FROM visits
-                WHERE cons_doctor IS NOT NULL AND cons_doctor != ''
-                  AND cons_doctor_name IS NOT NULL AND cons_doctor_name != ''
-                GROUP BY cons_doctor
-            ) src ON v.cons_doctor = src.cons_doctor
-            SET v.cons_doctor_name = src.resolved_name, v.updated_at = NOW()
-            WHERE (v.cons_doctor_name IS NULL OR v.cons_doctor_name = '')
-              AND v.cons_doctor IS NOT NULL
-              {$dateFilter}";
+        // 2. Resolve Cons Doctor Names
+        $targetCons = Visit::where(function($q) {
+                $q->whereNull('cons_doctor_name')->orWhere('cons_doctor_name', '');
+            })
+            ->whereNotNull('cons_doctor')
+            ->where('cons_doctor', '!=', '')
+            ->when($date, fn($q) => $q->where('visit_date', $date))
+            ->distinct()
+            ->pluck('cons_doctor');
 
-        try {
-            $healedCount += DB::affectingStatement($consSql);
-        } catch (\Exception $e) {
-            Log::warning("[SyncService] Cons doctor heal failed: " . $e->getMessage());
+        if ($targetCons->isNotEmpty()) {
+            foreach ($targetCons->chunk(100) as $chunk) {
+                $mappings = Visit::whereIn('cons_doctor', $chunk)
+                    ->whereNotNull('cons_doctor_name')
+                    ->where('cons_doctor_name', '!=', '')
+                    ->select('cons_doctor', DB::raw('MAX(cons_doctor_name) as name'))
+                    ->groupBy('cons_doctor')
+                    ->pluck('name', 'cons_doctor');
+
+                foreach ($mappings as $code => $name) {
+                    $healedCount += Visit::where('cons_doctor', $code)
+                        ->where(function($q) { $q->whereNull('cons_doctor_name')->orWhere('cons_doctor_name', ''); })
+                        ->when($date, fn($q) => $q->where('visit_date', $date))
+                        ->update(['cons_doctor_name' => $name, 'updated_at' => now()]);
+                }
+            }
         }
 
         if ($healedCount > 0) {
-            Log::info("[SyncService] Turbo Healing complete. Healed {$healedCount} records with 2 SQL queries.");
+            Log::info("[SyncService] Surgical Healing complete. Healed {$healedCount} records.");
         }
 
         return $healedCount;

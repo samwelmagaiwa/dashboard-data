@@ -159,13 +159,41 @@ class SyncController extends Controller
             return response()->json(['error' => 'Start date and end date are required'], 400);
         }
 
-        $start = Carbon::parse($startDate);
-        $end = Carbon::parse($endDate);
+        $start = \Carbon\Carbon::parse($startDate);
+        $end = \Carbon\Carbon::parse($endDate);
 
         $dates = [];
         for ($date = $start->copy(); $date->lte($end); $date->addDay()) {
             $dates[] = $date->toDateString();
         }
+
+        $batchName = "sync:$startDate:$endDate" . ($force ? ":force" : "");
+
+        // 1. Prevent duplicate active batches for the same range
+        $existingBatch = DB::table('job_batches')
+            ->where('name', $batchName)
+            ->whereNull('finished_at')
+            ->whereNull('cancelled_at')
+            ->orderByDesc('created_at')
+            ->first();
+
+        if ($existingBatch) {
+            return response()->json([
+                'message' => "An active sync for this range is already in progress. Re-attaching to existing batch.",
+                'batch_id' => $existingBatch->id,
+                'total_jobs' => $existingBatch->total_jobs,
+                'is_duplicate' => true
+            ], 200);
+        }
+
+        // 2. Clear out ALL other pending sync batches (auto or manual) to ensure this manual sync runs IMMEDIATELY.
+        DB::table('job_batches')
+            ->whereNull('finished_at')
+            ->whereNull('cancelled_at')
+            ->update([
+                'cancelled_at' => now()->getTimestamp(),
+                'finished_at' => now()->getTimestamp()
+            ]);
 
         $jobs = [];
         foreach ($dates as $date) {
@@ -173,7 +201,8 @@ class SyncController extends Controller
         }
 
         $batch = Bus::batch($jobs)
-            ->name("sync:$startDate:$endDate" . ($force ? ":force" : ""))
+            ->name($batchName)
+            ->onQueue('high')
             ->dispatch();
 
         return response()->json([
@@ -280,6 +309,17 @@ class SyncController extends Controller
             return response()->json(['error' => 'Batch not found'], 404);
         }
 
+        $progress = $batch->progress();
+        $isWaiting = ($progress == 0 && $batch->pendingJobs > 0);
+        $isSilent = (strpos($batch->name, 'auto-sync:') === 0);
+        
+        if ($isWaiting) {
+            $this->cleanupStaleBatches();
+        }
+
+        // Format the name for the message (remove sync: prefix and :force suffix)
+        $cleanName = str_replace(['sync:', ':force'], '', $batch->name);
+
         return response()->json([
             'id' => $batch->id,
             'name' => $batch->name,
@@ -287,9 +327,53 @@ class SyncController extends Controller
             'pending_jobs' => $batch->pendingJobs,
             'failed_jobs' => $batch->failedJobs,
             'processed_jobs' => $batch->processedJobs(),
-            'progress' => $batch->progress(),
+            'progress' => $progress,
             'finished' => $batch->finished(),
             'cancelled' => $batch->cancelled(),
+            'is_waiting' => $isWaiting,
+            'is_silent' => $isSilent,
+            'message' => ($progress < 100)
+                ? "Background Syncing... ({$batch->processedJobs()}/{$batch->totalJobs})"
+                : null
         ]);
+    }
+
+    /**
+     * Cancel a specific batch (user-initiated dismiss).
+     */
+    public function cancelBatch($id)
+    {
+        $batch = Bus::findBatch($id);
+        
+        if (!$batch) {
+            return response()->json(['error' => 'Batch not found'], 404);
+        }
+
+        if (!$batch->finished()) {
+            $batch->cancel();
+        }
+
+        return response()->json([
+            'message' => 'Sync cancelled successfully.',
+            'batch_id' => $id,
+        ]);
+    }
+
+    /**
+     * Cancel batches that have been unfinished for too long (zombies).
+     */
+    private function cleanupStaleBatches()
+    {
+        // Cancel batches older than 30 minutes that are still unfinished
+        $staleThreshold = now()->subMinutes(30)->getTimestamp();
+        
+        DB::table('job_batches')
+            ->whereNull('finished_at')
+            ->whereNull('cancelled_at')
+            ->where('created_at', '<', $staleThreshold)
+            ->update([
+                'cancelled_at' => $staleThreshold,
+                'finished_at' => $staleThreshold
+            ]);
     }
 }

@@ -17,34 +17,39 @@ use App\Http\Controllers\Api\V1\ReportsController;
 Route::post('/login', [AuthController::class, 'login']);
 
 // Public Dashboard Routes (No Authentication Required)
-Route::prefix('dashboard')->group(function () {
-    Route::get('/stats', [DashboardController::class, 'getStats']);
-    Route::get('/snapshot', [DashboardController::class, 'getSnapshot']);
-    Route::get('/clinics', [DashboardController::class, 'getClinicBreakdown']);
-    Route::get('/detailed-clinics', [DashboardController::class, 'getDetailedClinicVisits']);
-    Route::get('/gaps', [DashboardController::class, 'getGaps']);
-    Route::get('/pie-stats', [DashboardController::class, 'getPieStats']);
-    Route::get('/chart-stats', [DashboardController::class, 'getComparisonStats']);
-    Route::get('/check-updates', [DashboardController::class, 'checkUpdates']);
-    Route::get('/service-trends', [DashboardController::class, 'getServiceTrends']);
-    Route::get('/referral-stats', [DashboardController::class, 'getReferralStats']);
-    Route::get('/gender-radar', [DashboardController::class, 'getGenderRadarStats']);
-    Route::get('/pending-patients', [DashboardController::class, 'getPendingPatients']);
-    Route::get('/duplicated-data', [DashboardController::class, 'getDuplicateVisits']);
-    Route::get('/reports/pending', [ReportsController::class, 'pending']);
+Route::prefix('dashboard')->controller(DashboardController::class)->group(function () {
+    Route::get('/stats', 'getStats');
+    Route::get('/snapshot', 'getSnapshot');
+    Route::get('/clinics', 'getClinicBreakdown');
+    Route::get('/detailed-clinics', 'getDetailedClinicVisits');
+    Route::get('/gaps', 'getGaps');
+    Route::get('/pie-stats', 'getPieStats');
+    Route::get('/chart-stats', 'getComparisonStats');
+    Route::get('/check-updates', 'checkUpdates');
+    Route::get('/service-trends', 'getServiceTrends');
+    Route::get('/referral-stats', 'getReferralStats');
+    Route::get('/gender-radar', 'getGenderRadarStats');
+    Route::get('/pending-patients', 'getPendingPatients');
+    Route::get('/duplicated-data', 'getDuplicateVisits');
+});
+
+// Reports Routes
+Route::prefix('dashboard/reports')->controller(ReportsController::class)->group(function () {
+    Route::get('/pending', 'pending');
 });
 
 // Public Sync Routes (No Authentication Required)
-Route::prefix('sync')->group(function () {
-    Route::get('/range', [SyncController::class, 'syncRange']);
-    Route::get('/enqueue/range', [SyncController::class, 'enqueueSyncRange']);
-    Route::get('/batch/{id}', [SyncController::class, 'batchStatus']);
-    Route::get('/reaggregate/range', [SyncController::class, 'reaggregateRange']);
-    Route::post('/repair-gaps', [SyncController::class, 'repairGaps']);
-    Route::post('/reset-state', [SyncController::class, 'resetSyncState']);
-    Route::get('/heal-data', [SyncController::class, 'healData']);
-    Route::get('/trigger/{date?}', [SyncController::class, 'triggerSync']);
-    Route::get('/{date?}', [SyncController::class, 'sync']);
+Route::prefix('sync')->controller(SyncController::class)->group(function () {
+    Route::get('/range', 'syncRange');
+    Route::get('/enqueue/range', 'enqueueSyncRange');
+    Route::get('/batch/{id}', 'batchStatus');
+    Route::get('/reaggregate/range', 'reaggregateRange');
+    Route::post('/repair-gaps', 'repairGaps');
+    Route::post('/cancel-batch/{id}', 'cancelBatch');
+    Route::post('/reset-state', 'resetSyncState');
+    Route::get('/heal-data', 'healData');
+    Route::get('/trigger/{date?}', 'triggerSync');
+    Route::get('/{date?}', 'sync');
 });
 
 // Protected Routes (Authentication Required)
