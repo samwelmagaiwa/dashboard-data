@@ -12,7 +12,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
-class SyncForDateJob implements ShouldQueue, ShouldBeUnique
+class SyncForDateJob implements ShouldQueue
 {
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -66,7 +66,7 @@ class SyncForDateJob implements ShouldQueue, ShouldBeUnique
             }
         }
 
-        $result = $syncService->syncForDateOptimized($this->date);
+        $result = $syncService->syncForDate($this->date);
 
         if (!$result['success']) {
             $error = $result['error'] ?? 'Sync failed';

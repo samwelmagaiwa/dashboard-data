@@ -62,11 +62,14 @@ class SyncController extends Controller
             $formattedDate = $date ?: date('Y-m-d');
         }
 
-        \App\Jobs\SyncForDateJob::dispatch($formattedDate);
+        $batch = Bus::batch([
+            new \App\Jobs\SyncForDateJob($formattedDate, true) // Force true for manual triggers
+        ])->name("sync:{$formattedDate}")->dispatch();
 
         return response()->json([
             'message' => "Sync job dispatched for date {$formattedDate}",
-            'status' => 'queued'
+            'status' => 'queued',
+            'batch_id' => $batch->id
         ]);
     }
 
@@ -314,7 +317,7 @@ class SyncController extends Controller
         $isSilent = (strpos($batch->name, 'auto-sync:') === 0);
         
         if ($isWaiting) {
-            $this->cleanupStaleBatches();
+            $this->syncService->cleanupStaleBatches();
         }
 
         // Format the name for the message (remove sync: prefix and :force suffix)
@@ -359,21 +362,5 @@ class SyncController extends Controller
         ]);
     }
 
-    /**
-     * Cancel batches that have been unfinished for too long (zombies).
-     */
-    private function cleanupStaleBatches()
-    {
-        // Cancel batches older than 30 minutes that are still unfinished
-        $staleThreshold = now()->subMinutes(30)->getTimestamp();
-        
-        DB::table('job_batches')
-            ->whereNull('finished_at')
-            ->whereNull('cancelled_at')
-            ->where('created_at', '<', $staleThreshold)
-            ->update([
-                'cancelled_at' => $staleThreshold,
-                'finished_at' => $staleThreshold
-            ]);
-    }
+
 }

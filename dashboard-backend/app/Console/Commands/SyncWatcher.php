@@ -28,6 +28,10 @@ class SyncWatcher extends Command
             $url      = "{$baseUrl}/{$todayYmd}";
 
             try {
+                // Ensure SyncService is resolved here to call cleanup
+                $syncService = app(\App\Services\SyncService::class);
+                $syncService->cleanupStaleBatches(30);
+
                 // ── Atomic single-instance guard ─────────────────────────────
                 // Only ONE sync:watch process may dispatch at a time (across all terminals)
                 $dispatchLock = Cache::lock('sync_watcher_dispatch_lock', 60);

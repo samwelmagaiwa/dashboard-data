@@ -61,7 +61,7 @@ class DashboardController extends Controller
 
         \Illuminate\Support\Facades\Log::info("[Dashboard] getStats", ['start' => $startDate, 'end' => $endDate]);
 
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate, $comparison) {
+        $data = Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate, $comparison) {
             $stats = $this->aggregateStats($startDate, $endDate);
             $prevStats = $this->aggregateStats($comparison['start']->toDateString(), $comparison['end']->toDateString());
 
@@ -70,30 +70,61 @@ class DashboardController extends Controller
                 ->where('stat_date', '<=', $endDate)
                 ->count();
 
-            $activeBatch = DB::table('job_batches')
-                ->whereNull('finished_at')
-                ->whereNull('cancelled_at')
-                ->latest('created_at')
-                ->first();
-
             return [
-                'start_date' => $startDate,
-                'end_date' => $endDate,
-                'compLabel' => $comparison['label'],
-                'meta' => [
-                    'expected_days' => $expectedDays,
-                    'aggregated_days' => $aggregatedDays,
-                    'is_fully_aggregated' => $aggregatedDays >= $expectedDays,
-                    'is_syncing' => \App\Models\SyncLog::whereIn('status', ['PROCESSING', 'PENDING'])
-                        ->where('updated_at', '>', now()->subMinutes(15))
-                        ->exists() || ($activeBatch !== null),
-                    'active_batch_id' => $activeBatch ? $activeBatch->id : null,
-                    'cached_at' => now()->toDateTimeString(),
-                ],
                 'stats' => $stats,
-                'previous_stats' => $prevStats
+                'previous_stats' => $prevStats,
+                'expected_days' => $expectedDays,
+                'aggregated_days' => $aggregatedDays,
             ];
         });
+
+        // Sync status must NEVER be cached as it changes frequently and triggers UI loops
+        $activeBatch = DB::table('job_batches')
+            ->whereNull('finished_at')
+            ->whereNull('cancelled_at')
+            ->latest('created_at')
+            ->first();
+
+        // Calculate metadata dynamically on every request
+        $isSyncingNow = \App\Models\SyncLog::whereIn('status', ['PROCESSING', 'PENDING'])
+            ->where('updated_at', '>', now()->subMinutes(15))
+            ->exists() || ($activeBatch !== null);
+
+        // AUTO-TRIGGER SYNC FOR GAPS (Silent Background Update)
+        if (!$isSyncingNow) {
+            $mainGaps = $this->gapService->detectGaps($startDate, $endDate);
+            $compGaps = $this->gapService->detectGaps($comparison['start']->toDateString(), $comparison['end']->toDateString());
+            $allGaps = array_merge($mainGaps, $compGaps);
+
+            if (count($allGaps) > 0 && count($allGaps) <= 60) { // Safety Threshold: Max 2 months auto-sync
+                $syncDates = array_unique(array_column($allGaps, 'date'));
+                $jobs = [];
+                foreach ($syncDates as $d) {
+                    $jobs[] = new \App\Jobs\SyncForDateJob($d, false);
+                }
+                $batch = Bus::batch($jobs)->name("auto-sync-gaps-{$startDate}")->dispatch();
+                $isSyncingNow = true;
+                $activeBatch = $batch;
+            }
+        }
+
+        $meta = [
+            'expected_days' => $data['expected_days'],
+            'aggregated_days' => $data['aggregated_days'],
+            'is_fully_aggregated' => $data['aggregated_days'] >= $data['expected_days'],
+            'is_syncing' => $isSyncingNow,
+            'active_batch_id' => $activeBatch ? $activeBatch->id : null,
+            'cached_at' => now()->toDateTimeString(),
+        ];
+
+        return [
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+            'compLabel' => $comparison['label'],
+            'meta' => $meta,
+            'stats' => $data['stats'],
+            'previous_stats' => $data['previous_stats']
+        ];
     }
 
     private function getComparisonPeriod(Carbon $start, Carbon $end)
@@ -226,8 +257,14 @@ class DashboardController extends Controller
      */
     public function getClinicBreakdown(Request $request)
     {
-        $startDate = $request->query('start_date', date('Y-m-d'));
-        $endDate = $request->query('end_date', date('Y-m-d'));
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
+        $singleDate = $request->query('date');
+
+        if (!$startDate || !$endDate) {
+            $startDate = $singleDate ?? date('Y-m-d');
+            $endDate = $startDate;
+        }
 
         $cacheKey = $this->cacheKey('clinic_breakdown', $startDate, $endDate);
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
@@ -252,11 +289,20 @@ class DashboardController extends Controller
                 ->pluck('total_visits', 'clinic_name')
                 ->toArray();
 
+            $prevCountsMapped = [];
+            foreach ($prevCounts as $name => $val) {
+                // Normalize internal spaces and trim
+                $normalized = preg_replace('/\s+/', ' ', trim($name));
+                $prevCountsMapped[$normalized] = (int)$val;
+            }
+
             $breakdown = [];
             foreach ($current as $row) {
-                $clinicName = $row->clinic_name;
+                $rawName = $row->clinic_name;
+                $normalizedName = preg_replace('/\s+/', ' ', trim($rawName));
+                
                 $cur = (int) ($row->total_visits ?? 0);
-                $prev = (int) ($prevCounts[$clinicName] ?? 0);
+                $prev = (int) ($prevCountsMapped[$normalizedName] ?? 0);
 
                 $trend = 0.0;
                 if ($prev > 0) {
@@ -276,7 +322,7 @@ class DashboardController extends Controller
                 }
 
                 $breakdown[] = [
-                    'clinic_name' => $clinicName,
+                    'clinic_name' => $rawName,
                     'total_visits' => $cur,
                     'previous_visits' => $prev,
                     'trend' => $trend,
@@ -295,8 +341,15 @@ class DashboardController extends Controller
      */
     public function getDetailedClinicVisits(Request $request)
     {
-        $startDate = $request->query('start_date') ?: date('Y-m-d');
-        $endDate = $request->query('end_date') ?: date('Y-m-d');
+        $startDate = $request->query('start_date');
+        $endDate = $request->query('end_date');
+        $singleDate = $request->query('date');
+
+        if (!$startDate || !$endDate) {
+            $startDate = $singleDate ?? date('Y-m-d');
+            $endDate = $startDate;
+        }
+
         $maxPerPage = $request->query('export') ? 5000 : 1000;
         $perPage = min((int) $request->query('per_page', 500), $maxPerPage);
         $page = (int) $request->query('page', 1);
@@ -329,16 +382,16 @@ class DashboardController extends Controller
                 ->orderBy('visit_date', 'desc')
                 ->paginate($perPage, ['*'], 'page', $page);
 
-            return response()->json([
+            return [
                 'status' => 'success',
-                'data' => $paginated->items(),
+                'data' => collect($paginated->items())->toArray(),
                 'pagination' => [
                     'current_page' => $paginated->currentPage(),
                     'last_page' => $paginated->lastPage(),
                     'per_page' => $paginated->perPage(),
                     'total' => $paginated->total(),
                 ]
-            ]);
+            ];
         });
     }
 
@@ -352,12 +405,12 @@ class DashboardController extends Controller
 
         $gaps = $this->gapService->detectGaps($startDate, $endDate);
 
-        return response()->json([
+        return [
             'start_date' => $startDate,
             'end_date' => $endDate,
             'gaps' => $gaps,
             'gap_count' => count($gaps)
-        ]);
+        ];
     }
 
     /**
@@ -811,7 +864,7 @@ class DashboardController extends Controller
 
         \Illuminate\Support\Facades\Log::info("[Dashboard] getSnapshot", ['start' => $startDate, 'end' => $endDate, 'period' => $period]);
 
-        return Cache::remember($cacheKey, $ttl, function() use ($request) {
+        $data = Cache::remember($cacheKey, $ttl, function() use ($request) {
             return [
                 'stats' => $this->getStats($request),
                 'clinics' => $this->getClinicBreakdown($request),
@@ -822,6 +875,13 @@ class DashboardController extends Controller
                 'generated_at' => now()->toDateTimeString(),
             ];
         });
+
+        // Ensure we always return the LIVE meta (including sync status) 
+        // to avoid stale UI indicators in the consolidated snapshot.
+        $liveStats = $this->getStats($request);
+        $data['stats']['meta'] = $liveStats['meta'];
+
+        return $data;
     }
 
     /**

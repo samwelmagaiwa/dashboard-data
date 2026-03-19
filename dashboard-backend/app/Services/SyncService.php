@@ -108,7 +108,33 @@ class SyncService
             Log::warning("[SyncService] Cleared stale sync log ID: {$log->id} for date: {$log->sync_date}");
         }
 
+        // Also cleanup stale job batches (zombies)
+        $this->cleanupStaleBatches($minutes);
+
         return count($staleLogs);
+    }
+
+    /**
+     * Cancel batches that have been unfinished for too long (zombies).
+     */
+    public function cleanupStaleBatches($minutes = 30)
+    {
+        $staleThreshold = now()->subMinutes($minutes)->getTimestamp();
+        
+        $affected = DB::table('job_batches')
+            ->whereNull('finished_at')
+            ->whereNull('cancelled_at')
+            ->where('created_at', '<', $staleThreshold)
+            ->update([
+                'cancelled_at' => $staleThreshold,
+                'finished_at' => $staleThreshold
+            ]);
+
+        if ($affected > 0) {
+            Log::info("[SyncService] Cleaned up {$affected} stale job batches older than {$minutes} minutes.");
+        }
+
+        return $affected;
     }
 
     /**
@@ -146,9 +172,9 @@ class SyncService
             $password = config('dashboard.sync.password', env('DASHBOARD_API_PASSWORD'));
 
             $response = Http::withBasicAuth($username, $password)
-                ->connectTimeout(10)
+                ->connectTimeout(5)
                 ->timeout(60)
-                ->retry(3, 1000)
+                ->retry(2, 500)
                 ->get($url);
 
             if ($response->successful()) {
@@ -203,7 +229,7 @@ class SyncService
                     'finished_at' => now(),
                 ]);
 
-                $this->clearCacheForDate($date);
+                // Removed redundant clearCacheForDate($date) here as updateAggregatedStats already does it.
 
                 flock($fp, LOCK_UN);
                 fclose($fp);
@@ -623,61 +649,33 @@ class SyncService
         $healedCount = 0;
         $v = $this->getCacheVersion();
 
-        // 1. Resolve Bill Doctor Names
-        $targetCodes = Visit::where(function($q) {
-                $q->whereNull('bill_doct_name')->orWhere('bill_doct_name', '');
-            })
-            ->whereNotNull('doct_code')
-            ->where('doct_code', '!=', '')
-            ->when($date, fn($q) => $q->where('visit_date', $date))
-            ->distinct()
-            ->pluck('doct_code');
+        // 1. Resolve Bill Doctor Names with ONE bulk query
+        $billHealed = DB::update("
+            UPDATE visits v1
+            JOIN (
+                SELECT doct_code, MAX(bill_doct_name) as name 
+                FROM visits 
+                WHERE bill_doct_name IS NOT NULL AND bill_doct_name != '' 
+                GROUP BY doct_code
+            ) v2 ON v1.doct_code = v2.doct_code
+            SET v1.bill_doct_name = v2.name, v1.updated_at = NOW()
+            WHERE (v1.bill_doct_name IS NULL OR v1.bill_doct_name = '')
+            " . ($date ? "AND v1.visit_date = ?" : ""), $date ? [$date] : []);
 
-        if ($targetCodes->isNotEmpty()) {
-            foreach ($targetCodes->chunk(100) as $chunk) {
-                $mappings = Visit::whereIn('doct_code', $chunk)
-                    ->whereNotNull('bill_doct_name')
-                    ->where('bill_doct_name', '!=', '')
-                    ->select('doct_code', DB::raw('MAX(bill_doct_name) as name'))
-                    ->groupBy('doct_code')
-                    ->pluck('name', 'doct_code');
+        // 2. Resolve Cons Doctor Names with ONE bulk query
+        $consHealed = DB::update("
+            UPDATE visits v1
+            JOIN (
+                SELECT cons_doctor, MAX(cons_doctor_name) as name 
+                FROM visits 
+                WHERE cons_doctor_name IS NOT NULL AND cons_doctor_name != '' 
+                GROUP BY cons_doctor
+            ) v2 ON v1.cons_doctor = v2.cons_doctor
+            SET v1.cons_doctor_name = v2.name, v1.updated_at = NOW()
+            WHERE (v1.cons_doctor_name IS NULL OR v1.cons_doctor_name = '')
+            " . ($date ? "AND v1.visit_date = ?" : ""), $date ? [$date] : []);
 
-                foreach ($mappings as $code => $name) {
-                    $healedCount += Visit::where('doct_code', $code)
-                        ->where(function($q) { $q->whereNull('bill_doct_name')->orWhere('bill_doct_name', ''); })
-                        ->when($date, fn($q) => $q->where('visit_date', $date))
-                        ->update(['bill_doct_name' => $name, 'updated_at' => now()]);
-                }
-            }
-        }
-
-        // 2. Resolve Cons Doctor Names
-        $targetCons = Visit::where(function($q) {
-                $q->whereNull('cons_doctor_name')->orWhere('cons_doctor_name', '');
-            })
-            ->whereNotNull('cons_doctor')
-            ->where('cons_doctor', '!=', '')
-            ->when($date, fn($q) => $q->where('visit_date', $date))
-            ->distinct()
-            ->pluck('cons_doctor');
-
-        if ($targetCons->isNotEmpty()) {
-            foreach ($targetCons->chunk(100) as $chunk) {
-                $mappings = Visit::whereIn('cons_doctor', $chunk)
-                    ->whereNotNull('cons_doctor_name')
-                    ->where('cons_doctor_name', '!=', '')
-                    ->select('cons_doctor', DB::raw('MAX(cons_doctor_name) as name'))
-                    ->groupBy('cons_doctor')
-                    ->pluck('name', 'cons_doctor');
-
-                foreach ($mappings as $code => $name) {
-                    $healedCount += Visit::where('cons_doctor', $code)
-                        ->where(function($q) { $q->whereNull('cons_doctor_name')->orWhere('cons_doctor_name', ''); })
-                        ->when($date, fn($q) => $q->where('visit_date', $date))
-                        ->update(['cons_doctor_name' => $name, 'updated_at' => now()]);
-                }
-            }
-        }
+        $healedCount = $billHealed + $consHealed;
 
         if ($healedCount > 0) {
             Log::info("[SyncService] Surgical Healing complete. Healed {$healedCount} records.");
@@ -727,23 +725,11 @@ class SyncService
     {
         if (empty($data)) return;
 
-        $newItems = [];
-        foreach ($data as $code => $item) {
-            $cacheKey = "master_data_exists_{$type}_{$code}";
-            if (!Cache::has($cacheKey)) {
-                $newItems[] = $item;
-            }
-        }
-
-        if (!empty($newItems)) {
+        if (!empty($data)) {
             try {
-                // Perform upsert outside of any active visit transaction
-                DB::table($type)->upsert($newItems, $uniqueKeys, $updateKeys);
-                
-                // Cache existence for 24 hours to avoid re-upserting in other concurrent jobs
-                foreach ($data as $code => $item) {
-                    Cache::put("master_data_exists_{$type}_{$code}", true, now()->addDay());
-                }
+                // Skip the Cache::has checks and just perform the idempotent upsert.
+                // ON DUPLICATE KEY UPDATE is fast and avoids N+1 cache lookups.
+                DB::table($type)->upsert(array_values($data), $uniqueKeys, $updateKeys);
             } catch (\Exception $e) {
                 Log::warning("[SyncService] Master data upsert failed for $type: " . $e->getMessage());
             }
