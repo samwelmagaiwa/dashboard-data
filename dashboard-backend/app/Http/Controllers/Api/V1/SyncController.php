@@ -7,6 +7,9 @@ use App\Models\Visit;
 use App\Models\SyncLog;
 use App\Models\DailyDashboardStat;
 use App\Models\ClinicStat;
+use App\Services\SyncService;
+use App\Jobs\SyncForDateJob;
+use App\Jobs\HealDataJob;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
@@ -18,7 +21,7 @@ class SyncController extends Controller
 {
     protected $syncService;
 
-    public function __construct(\App\Services\SyncService $syncService)
+    public function __construct(SyncService $syncService)
     {
         $this->syncService = $syncService;
         set_time_limit(0);
@@ -28,7 +31,7 @@ class SyncController extends Controller
     {
         // Handle Ymd or Y-m-d
         if ($date && strlen($date) === 8 && is_numeric($date)) {
-            $formattedDate = \Carbon\Carbon::createFromFormat('Ymd', $date)->toDateString();
+            $formattedDate = Carbon::createFromFormat('Ymd', $date)->toDateString();
         } else {
             $formattedDate = $date ?: date('Y-m-d');
         }
@@ -57,13 +60,13 @@ class SyncController extends Controller
     {
         // Handle Ymd or Y-m-d
         if ($date && strlen($date) === 8 && is_numeric($date)) {
-            $formattedDate = \Carbon\Carbon::createFromFormat('Ymd', $date)->toDateString();
+            $formattedDate = Carbon::createFromFormat('Ymd', $date)->toDateString();
         } else {
             $formattedDate = $date ?: date('Y-m-d');
         }
 
         $batch = Bus::batch([
-            new \App\Jobs\SyncForDateJob($formattedDate, true) // Force true for manual triggers
+            new SyncForDateJob($formattedDate, true) // Force true for manual triggers
         ])->name("sync:{$formattedDate}")->dispatch();
 
         return response()->json([
@@ -162,8 +165,8 @@ class SyncController extends Controller
             return response()->json(['error' => 'Start date and end date are required'], 400);
         }
 
-        $start = \Carbon\Carbon::parse($startDate);
-        $end = \Carbon\Carbon::parse($endDate);
+        $start = Carbon::parse($startDate);
+        $end = Carbon::parse($endDate);
 
         $dates = [];
         for ($date = $start->copy(); $date->lte($end); $date->addDay()) {
@@ -200,8 +203,7 @@ class SyncController extends Controller
 
         $jobs = [];
         foreach ($dates as $date) {
-            $jobs[] = new \App\Jobs\SyncForDateJob($date, $force);
-        }
+            $jobs[] = new SyncForDateJob($date, $force);        }
 
         $batch = Bus::batch($jobs)
             ->name($batchName)
@@ -222,7 +224,7 @@ class SyncController extends Controller
     {
         $date = $request->query('date');
         
-        $batch = Bus::batch([new \App\Jobs\HealDataJob($date)])
+        $batch = Bus::batch([new HealDataJob($date)])
             ->name("data-healing:" . ($date ?: 'all'))
             ->dispatch();
             
@@ -237,8 +239,8 @@ class SyncController extends Controller
      */
     public function resetSyncState()
     {
-        \App\Models\SyncLog::where('status', 'PENDING')->update(['status' => 'FAILED', 'error_message' => 'Manual Reset']);
-        \App\Models\SyncLog::where('status', 'PROCESSING')->update(['status' => 'FAILED', 'error_message' => 'Manual Reset']);
+        SyncLog::where('status', 'PENDING')->update(['status' => 'FAILED', 'error_message' => 'Manual Reset']);
+        SyncLog::where('status', 'PROCESSING')->update(['status' => 'FAILED', 'error_message' => 'Manual Reset']);
         DB::table('job_batches')->whereNull('finished_at')->update(['cancelled_at' => time(), 'finished_at' => time()]);
         Cache::flush();
 
@@ -261,14 +263,14 @@ class SyncController extends Controller
         foreach ($dates as $date) {
             if ($force) {
                 // Remove existing success logs to allow overwrite if forced
-                \App\Models\SyncLog::where('sync_date', $date)
+                SyncLog::where('sync_date', $date)
                     ->where('sync_type', 'visits')
                     ->delete();
                 
                 // Also clear cache to be sure
                 $this->syncService->clearCacheForDate($date);
             }
-            $jobs[] = new \App\Jobs\SyncForDateJob($date, $force);
+            $jobs[] = new SyncForDateJob($date, $force);
         }
 
         $batch = Bus::batch($jobs)
@@ -288,7 +290,7 @@ class SyncController extends Controller
     {
         // Special case for 'auto' - return a global status if any sync is running
         if ($id === 'active' || $id === 'global') {
-            $activeSyncs = \App\Models\SyncLog::whereIn('status', ['PROCESSING', 'PENDING'])
+            $activeSyncs = SyncLog::whereIn('status', ['PROCESSING', 'PENDING'])
                 ->where('updated_at', '>', now()->subMinutes(15))
                 ->count();
             
