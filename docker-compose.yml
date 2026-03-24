@@ -1,0 +1,59 @@
+x-backend-service: &backend-service
+  build:
+    context: ./dashboard-backend
+  image: ${BACKEND_IMAGE:-samwelmagaiwa/dashboard-backend}:${IMAGE_TAG:-latest}
+  restart: unless-stopped
+  env_file:
+    - ${BACKEND_ENV_FILE:-./env/backend.production.env}
+  volumes:
+    - ${BACKEND_STORAGE_PATH:-./dashboard-backend/storage}:/var/www/html/storage
+  networks:
+    - dashboard_network
+
+services:
+  dashboard_backend:
+    <<: *backend-service
+    environment:
+      CONTAINER_ROLE: web
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-false}
+    expose:
+      - "80"
+
+  dashboard_worker:
+    <<: *backend-service
+    depends_on:
+      - dashboard_backend
+    environment:
+      CONTAINER_ROLE: worker
+      RUN_MIGRATIONS: "false"
+    command: ["php", "artisan", "queue:work", "--queue=high,default", "--sleep=3", "--tries=3", "--timeout=900"]
+
+  dashboard_scheduler:
+    <<: *backend-service
+    depends_on:
+      - dashboard_backend
+    environment:
+      CONTAINER_ROLE: scheduler
+      RUN_MIGRATIONS: "false"
+    command: ["/bin/sh", "-lc", "while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"]
+
+  dashboard_frontend:
+    build:
+      context: ./dashboard-frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
+    image: ${FRONTEND_IMAGE:-samwelmagaiwa/dashboard-frontend}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - dashboard_backend
+    environment:
+      FRONTEND_SERVER_NAME: ${FRONTEND_SERVER_NAME:-clinicaldashboard.mloganzila.or.tz}
+      BACKEND_UPSTREAM: ${BACKEND_UPSTREAM:-http://dashboard_backend:80}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8081}:80"
+    networks:
+      - dashboard_network
+
+networks:
+  dashboard_network:
+    driver: bridge

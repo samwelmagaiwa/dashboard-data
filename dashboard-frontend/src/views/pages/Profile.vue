@@ -35,7 +35,7 @@ onMounted(() => {
 
 const fetchProfile = async () => {
   try {
-    const res = await axios.get('http://127.0.0.1:8000/api/v1/profile', {
+    const res = await dashboard.api.get('/profile', {
       headers: { Authorization: `Bearer ${dashboard.token}` },
     })
     if (res.data.status === 'success') {
@@ -70,7 +70,7 @@ const updateProfile = async () => {
   formData.append('_method', 'PUT') // Handle PUT
 
   try {
-    const res = await axios.post('http://127.0.0.1:8000/api/v1/profile', formData, {
+    const res = await dashboard.api.post('/profile', formData, {
       headers: {
         Authorization: `Bearer ${dashboard.token}`,
       },
@@ -94,7 +94,11 @@ const updateProfile = async () => {
 const getAvatarUrl = (path) => {
   if (!path) return 'src/assets/images/avatars/8.jpg' // Default or handle asset
   if (path.startsWith('http')) return path
-  return `http://127.0.0.1:8000/${path}` // Laravel public link
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+  const baseUrl = apiBaseUrl.startsWith('http')
+    ? apiBaseUrl.replace(/\/api\/v1\/?$/, '')
+    : window.location.origin
+  return `${baseUrl}/${path.replace(/^\/+/, '')}`
 }
 </script>
 

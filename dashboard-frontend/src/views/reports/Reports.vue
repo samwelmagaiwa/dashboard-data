@@ -29,7 +29,7 @@ const fetchReports = async () => {
   isLoading.value = true
   const { start_date, end_date } = dashboard.calculateDateRange()
   try {
-    const res = await axios.get('http://127.0.0.1:8000/api/v1/reports/pending', {
+    const res = await dashboard.api.get('/reports/pending', {
       params: { start_date, end_date },
     })
     if (res.data.status === 'success') {

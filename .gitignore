@@ -1,0 +1,23 @@
+# Root Gitignore
+.env
+.env.local
+.env.production
+compose.env
+env/*.env
+!env/*.example.env
+
+# Dependencies
+dashboard-backend/vendor/
+dashboard-frontend/node_modules/
+dashboard-backend/node_modules/
+
+# Build artifacts
+dashboard-frontend/dist/
+dashboard-backend/public/build/
+
+# Editor/OS
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
+.idea/
