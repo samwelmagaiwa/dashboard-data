@@ -16,25 +16,25 @@ class UserSeeder extends Seeder
         $users = [
             [
                 'name' => 'Dr. Executive Director',
-                'email' => 'ed@mnh.go.tz',
+                'email' => 'ed@mloganzila.or.tz',
                 'password' => Hash::make('12345678'),
                 'role' => 'ED',
             ],
             [
                 'name' => 'Dr. Deputy Director',
-                'email' => 'ded@mnh.go.tz',
+                'email' => 'ded@mloganzila.or.tz',
                 'password' => Hash::make('12345678'),
                 'role' => 'DED',
             ],
             [
                 'name' => 'ICT Director',
-                'email' => 'dict@mnh.go.tz',
+                'email' => 'dict@mloganzila.or.tz',
                 'password' => Hash::make('12345678'),
                 'role' => 'DICT',
             ],
             [
                 'name' => 'Nurse Supervisor',
-                'email' => 'nurse@mnh.go.tz',
+                'email' => 'nurse@mloganzila.or.tz',
                 'password' => Hash::make('12345678'),
                 'role' => 'Nurse',
             ],
