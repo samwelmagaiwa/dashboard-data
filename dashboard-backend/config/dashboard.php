@@ -14,4 +14,20 @@ return [
         'password' => env('DASHBOARD_API_PASSWORD'),
         'base_url' => env('DASHBOARD_API_BASE_URL'),
     ],
+
+    'gap_detection' => [
+        // Weekdays that are not expected to have dashboard data.
+        // Carbon weekday numbering: 0 (Sunday) through 6 (Saturday).
+        'non_operational_weekdays' => array_values(array_filter(array_map(
+            static fn ($value) => is_numeric($value) ? (int) $value : null,
+            explode(',', env('DASHBOARD_NON_OPERATIONAL_WEEKDAYS', '0'))
+        ), static fn ($value) => $value !== null && $value >= 0 && $value <= 6)),
+
+        // Optional comma-separated YYYY-MM-DD dates to suppress from gap detection
+        // for public holidays, planned shutdowns, migrations, etc.
+        'excluded_dates' => array_values(array_filter(array_map(
+            static fn ($value) => trim($value),
+            explode(',', env('DASHBOARD_EXCLUDED_DATES', ''))
+        ))),
+    ],
 ];

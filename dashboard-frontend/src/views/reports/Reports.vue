@@ -82,7 +82,7 @@ const formatDate = (dateStr) => {
         <CButton
           color="white"
           class="shadow-sm px-3 border"
-          @click="$router.push('/public-dashboard')"
+          @click="$router.push('/')"
         >
           <CIcon icon="cil-arrow-left" class="me-2" />
           Dashboard

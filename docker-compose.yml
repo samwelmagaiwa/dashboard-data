@@ -19,7 +19,25 @@ services:
     expose:
       - "80"
 
-  dashboard_worker:
+  dashboard_worker_1:
+    <<: *backend-service
+    depends_on:
+      - dashboard_backend
+    environment:
+      CONTAINER_ROLE: worker
+      RUN_MIGRATIONS: "false"
+    command: ["php", "artisan", "queue:work", "--queue=high,default", "--sleep=3", "--tries=3", "--timeout=900"]
+
+  dashboard_worker_2:
+    <<: *backend-service
+    depends_on:
+      - dashboard_backend
+    environment:
+      CONTAINER_ROLE: worker
+      RUN_MIGRATIONS: "false"
+    command: ["php", "artisan", "queue:work", "--queue=high,default", "--sleep=3", "--tries=3", "--timeout=900"]
+
+  dashboard_worker_3:
     <<: *backend-service
     depends_on:
       - dashboard_backend
@@ -35,7 +53,16 @@ services:
     environment:
       CONTAINER_ROLE: scheduler
       RUN_MIGRATIONS: "false"
-    command: ["/bin/sh", "-lc", "while true; do php artisan schedule:run --verbose --no-interaction; sleep 60; done"]
+    command: ["php", "artisan", "schedule:work"]
+
+  dashboard_watcher:
+    <<: *backend-service
+    depends_on:
+      - dashboard_backend
+    environment:
+      CONTAINER_ROLE: watcher
+      RUN_MIGRATIONS: "false"
+    command: ["php", "artisan", "sync:watch"]
 
   dashboard_frontend:
     build:
@@ -49,6 +76,7 @@ services:
     environment:
       FRONTEND_SERVER_NAME: ${FRONTEND_SERVER_NAME:-clinicaldashboard.mloganzila.or.tz}
       BACKEND_UPSTREAM: ${BACKEND_UPSTREAM:-http://dashboard_backend:80}
+      NGINX_ENVSUBST_FILTER: 'FRONTEND_SERVER_NAME|BACKEND_UPSTREAM'
     ports:
       - "127.0.0.1:${FRONTEND_PORT:-8081}:80"
     networks:

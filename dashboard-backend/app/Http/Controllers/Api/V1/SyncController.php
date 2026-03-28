@@ -7,9 +7,11 @@ use App\Models\Visit;
 use App\Models\SyncLog;
 use App\Models\DailyDashboardStat;
 use App\Models\ClinicStat;
+use App\Services\GapDetectionService;
 use App\Services\SyncService;
 use App\Jobs\SyncForDateJob;
 use App\Jobs\HealDataJob;
+use App\Jobs\ReaggregateRangeJob;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
@@ -20,10 +22,12 @@ use Carbon\Carbon;
 class SyncController extends Controller
 {
     protected $syncService;
+    protected $gapService;
 
-    public function __construct(SyncService $syncService)
+    public function __construct(SyncService $syncService, GapDetectionService $gapService)
     {
         $this->syncService = $syncService;
+        $this->gapService = $gapService;
         set_time_limit(0);
     }
 
@@ -168,9 +172,70 @@ class SyncController extends Controller
         $start = Carbon::parse($startDate);
         $end = Carbon::parse($endDate);
 
+        if ($start->diffInDays($end) > 366) {
+            return response()->json(['error' => 'Range too large. Please sync max 1 year at a time.'], 400);
+        }
+
         $dates = [];
         for ($date = $start->copy(); $date->lte($end); $date->addDay()) {
+            if (!$this->gapService->expectsDataForDate($date)) {
+                continue;
+            }
+
             $dates[] = $date->toDateString();
+        }
+
+        $visitCounts = Visit::whereBetween('visit_date', [$startDate, $endDate])
+            ->selectRaw('visit_date, COUNT(*) as total_visits')
+            ->groupBy('visit_date')
+            ->pluck('total_visits', 'visit_date');
+
+        $statsByDate = DailyDashboardStat::whereBetween('stat_date', [$startDate, $endDate])
+            ->get(['stat_date', 'total_visits'])
+            ->keyBy(fn ($item) => $item->stat_date->format('Y-m-d'));
+
+        $syncDates = [];
+        $reaggregateDates = [];
+
+        foreach ($dates as $date) {
+            if ($force) {
+                $syncDates[] = $date;
+                continue;
+            }
+
+            $rawVisits = (int) ($visitCounts[$date] ?? 0);
+            $stat = $statsByDate->get($date);
+            $statVisits = $stat ? (int) $stat->total_visits : null;
+
+            if ($rawVisits > 0) {
+                if ($statVisits === null || $statVisits !== $rawVisits) {
+                    $reaggregateDates[] = $date;
+                }
+
+                continue;
+            }
+
+            if ($statVisits === null) {
+                $syncDates[] = $date;
+                continue;
+            }
+
+            if ($statVisits > 0) {
+                $syncDates[] = $date;
+            }
+        }
+
+        $syncDates = array_values(array_unique($syncDates));
+        $reaggregateDates = array_values(array_unique(array_diff($reaggregateDates, $syncDates)));
+
+        if (empty($syncDates) && empty($reaggregateDates)) {
+            return response()->json([
+                'message' => 'Selected range is already complete and aggregated.',
+                'batch_id' => null,
+                'total_jobs' => 0,
+                'sync_jobs' => 0,
+                'reaggregate_jobs' => 0,
+            ], 200);
         }
 
         $batchName = "sync:$startDate:$endDate" . ($force ? ":force" : "");
@@ -201,19 +266,26 @@ class SyncController extends Controller
                 'finished_at' => now()->getTimestamp()
             ]);
 
-        $jobs = [];
-        foreach ($dates as $date) {
-            $jobs[] = new SyncForDateJob($date, $force);        }
+        foreach ($syncDates as $date) {
+            $jobs[] = (new SyncForDateJob($date, $force))->onQueue('high');
+        }
+
+        foreach (array_chunk($reaggregateDates, 14) as $dateChunk) {
+            $jobs[] = (new ReaggregateRangeJob($dateChunk))->onQueue('default');
+        }
 
         $batch = Bus::batch($jobs)
             ->name($batchName)
-            ->onQueue('high')
             ->dispatch();
 
         return response()->json([
-            'message' => "Sync enqueued for range $startDate to $endDate (" . count($dates) . " jobs)" . ($force ? " [FORCE]" : ""),
+            'message' => $force
+                ? "Force sync enqueued for range $startDate to $endDate (" . count($jobs) . " jobs)."
+                : "Smart sync enqueued for range $startDate to $endDate ({$batch->totalJobs} jobs: " . count($syncDates) . " remote sync, " . count($reaggregateDates) . " dates to re-aggregate).",
             'batch_id' => $batch->id,
             'total_jobs' => $batch->totalJobs,
+            'sync_jobs' => count($syncDates),
+            'reaggregate_jobs' => count($reaggregateDates),
         ], 202);
     }
 
@@ -252,11 +324,45 @@ class SyncController extends Controller
      */
     public function repairGaps(Request $request)
     {
-        $dates = $request->input('dates', []);
-        $force = $request->input('force', false);
-        
+        $rawDates = $request->input('dates', []);
+        $force = filter_var($request->input('force', false), FILTER_VALIDATE_BOOL);
+
+        if (!is_array($rawDates)) {
+            return response()->json(['error' => 'Dates must be provided as an array'], 422);
+        }
+
+        $dates = [];
+        $ignored = [];
+
+        foreach ($rawDates as $rawDate) {
+            try {
+                $date = Carbon::parse($rawDate)->toDateString();
+            } catch (\Throwable $e) {
+                $ignored[] = [
+                    'date' => (string) $rawDate,
+                    'reason' => 'Invalid date format',
+                ];
+                continue;
+            }
+
+            if ($this->gapService->shouldSkipDate($date)) {
+                $ignored[] = [
+                    'date' => $date,
+                    'reason' => 'Date is outside the operational gap-detection calendar',
+                ];
+                continue;
+            }
+
+            $dates[$date] = $date;
+        }
+
+        $dates = array_values($dates);
+
         if (empty($dates)) {
-            return response()->json(['error' => 'No dates provided'], 400);
+            return response()->json([
+                'error' => 'No repairable operational dates provided',
+                'ignored_dates' => $ignored,
+            ], 422);
         }
 
         $jobs = [];
@@ -280,6 +386,7 @@ class SyncController extends Controller
         return response()->json([
             'message' => 'Repair jobs enqueued for ' . count($dates) . ' dates.',
             'batch_id' => $batch->id,
+            'ignored_dates' => $ignored,
         ], 202);
     }
 

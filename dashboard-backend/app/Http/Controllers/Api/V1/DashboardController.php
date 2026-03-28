@@ -17,6 +17,15 @@ use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
+    private function rememberUnlessFresh(Request $request, string $cacheKey, int $ttl, callable $callback)
+    {
+        if ($request->boolean('fresh')) {
+            return $callback();
+        }
+
+        return Cache::remember($cacheKey, $ttl, $callback);
+    }
+
     /**
      * Cache version - increment this when cache structure changes.
      * This invalidates all dashboard caches without manual key updates.
@@ -61,14 +70,12 @@ class DashboardController extends Controller
 
         \Illuminate\Support\Facades\Log::info("[Dashboard] getStats", ['start' => $startDate, 'end' => $endDate]);
 
-        $data = Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate, $comparison) {
+        $data = $this->rememberUnlessFresh($request, $cacheKey, $ttl, function() use ($startDate, $endDate, $comparison) {
             $stats = $this->aggregateStats($startDate, $endDate);
             $prevStats = $this->aggregateStats($comparison['start']->toDateString(), $comparison['end']->toDateString());
 
-            $expectedDays = Carbon::parse($startDate)->diffInDays(Carbon::parse($endDate)) + 1;
-            $aggregatedDays = DailyDashboardStat::where('stat_date', '>=', $startDate)
-                ->where('stat_date', '<=', $endDate)
-                ->count();
+            $expectedDays = $this->gapService->countExpectedDataDays($startDate, $endDate);
+            $aggregatedDays = $this->gapService->countRecordedDataDays($startDate, $endDate);
 
             return [
                 'stats' => $stats,
@@ -270,7 +277,7 @@ class DashboardController extends Controller
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
+        return $this->rememberUnlessFresh($request, $cacheKey, $ttl, function() use ($startDate, $endDate) {
             $comparison = $this->getComparisonPeriod(Carbon::parse($startDate), Carbon::parse($endDate));
             $compLabel = $comparison['label'];
 
@@ -358,7 +365,7 @@ class DashboardController extends Controller
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 60 : 3600;
 
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate, $perPage, $page) {
+        return $this->rememberUnlessFresh($request, $cacheKey, $ttl, function() use ($startDate, $endDate, $perPage, $page) {
             $query = Visit::where('visit_date', '>=', $startDate)
                 ->where('visit_date', '<=', $endDate)
                 ->select([
@@ -409,7 +416,10 @@ class DashboardController extends Controller
             'start_date' => $startDate,
             'end_date' => $endDate,
             'gaps' => $gaps,
-            'gap_count' => count($gaps)
+            'gap_count' => count($gaps),
+            'calendar' => [
+                'expected_data_days' => $this->gapService->countExpectedDataDays($startDate, $endDate),
+            ],
         ];
     }
 
@@ -431,7 +441,7 @@ class DashboardController extends Controller
         $isToday = ($startDate === date('Y-m-d') && $endDate === date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
+        return $this->rememberUnlessFresh($request, $cacheKey, $ttl, function() use ($startDate, $endDate) {
             // 1. Gender Distribution (Strictly from aggregated stats)
             $genderStats = \App\Models\DailyDashboardStat::where('stat_date', '>=', $startDate)
                 ->where('stat_date', '<=', $endDate)
@@ -494,7 +504,7 @@ class DashboardController extends Controller
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 60 : 600;
 
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
+        return $this->rememberUnlessFresh($request, $cacheKey, $ttl, function() use ($startDate, $endDate) {
             $comparison = $this->getComparisonPeriod(Carbon::parse($startDate), Carbon::parse($endDate));
 
             $current = $this->aggregateStats($startDate, $endDate);
@@ -575,7 +585,7 @@ class DashboardController extends Controller
         $ttl = $includesToday ? 30 : 300; // 30 seconds for today, 5 minutes otherwise
         $breakdownSuffix = $breakdown === 'monthly' ? '_monthly' : '';
 
-        return Cache::remember($cacheKey . $breakdownSuffix, $ttl, function() use ($period, $startDate, $endDate, $start, $end, $breakdown) {
+        return $this->rememberUnlessFresh($request, $cacheKey . $breakdownSuffix, $ttl, function() use ($period, $startDate, $endDate, $start, $end, $breakdown) {
             $labels = [];
             $dataMap = [];
             $days = $start->diffInDays($end) + 1;
@@ -823,7 +833,7 @@ class DashboardController extends Controller
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 30 : 300;
 
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
+        return $this->rememberUnlessFresh($request, $cacheKey, $ttl, function() use ($startDate, $endDate) {
             // Use pre-aggregated DailyReferralStat for much better performance
             // Group strictly by CODE to merge duplicates where names might differ slightly
             $stats = DailyReferralStat::where('stat_date', '>=', $startDate)
@@ -864,7 +874,7 @@ class DashboardController extends Controller
 
         \Illuminate\Support\Facades\Log::info("[Dashboard] getSnapshot", ['start' => $startDate, 'end' => $endDate, 'period' => $period]);
 
-        $data = Cache::remember($cacheKey, $ttl, function() use ($request) {
+        $data = $this->rememberUnlessFresh($request, $cacheKey, $ttl, function() use ($request) {
             return [
                 'stats' => $this->getStats($request),
                 'clinics' => $this->getClinicBreakdown($request),

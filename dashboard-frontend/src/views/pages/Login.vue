@@ -27,7 +27,7 @@ const handleLogin = async () => {
     if (result.user && adminRoles.includes(result.user.role)) {
       router.push('/dashboard')
     } else {
-      router.push('/public-dashboard')
+      router.push('/')
     }
   } else {
     errorMessage.value = result.message

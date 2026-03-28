@@ -10,6 +10,7 @@ use App\Models\Clinic;
 use App\Models\Department;
 use App\Models\Doctor;
 use App\Models\DailyReferralStat;
+use App\Models\DuplicateVisit;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -141,7 +142,7 @@ class SyncService
      * Unified sync for a specific date (Y-m-d)
      * Wrapped in transaction for integrity.
      */
-    public function syncForDate($date)
+    public function syncForDate($date, $force = false)
     {
         $lockFile = storage_path("framework/cache/sync_{$date}.lock");
         $fp = fopen($lockFile, 'w+');
@@ -211,7 +212,11 @@ class SyncService
                 $this->persistMasterData('doctors', $masterData['doctors'], ['doctor_code'], ['doctor_code']);
 
                 // 2. Perform main visit sync in a transaction
-                $syncedCount = DB::transaction(function () use ($visits, $date) {
+                $syncedCount = DB::transaction(function () use ($visits, $date, $force) {
+                    if ($force) {
+                        $this->purgeDateData($date);
+                    }
+
                     return $this->bulkUpsertVisits($visits);
                 });
 
@@ -269,9 +274,21 @@ class SyncService
     /**
      * Alias for backward compatibility in jobs
      */
-    public function syncForDateOptimized($date)
+    public function syncForDateOptimized($date, $force = false)
     {
-        return $this->syncForDate($date);
+        return $this->syncForDate($date, $force);
+    }
+
+    private function purgeDateData(string $date): void
+    {
+        Visit::where('visit_date', $date)->delete();
+        DuplicateVisit::where('visit_date', $date)->delete();
+        DailyDashboardStat::where('stat_date', $date)->delete();
+        ClinicStat::where('stat_date', $date)->delete();
+        DailyReferralStat::where('stat_date', $date)->delete();
+
+        $this->clearCacheForDate($date);
+        Log::info("[SyncService] Purged existing dashboard data for forced re-sync", ['date' => $date]);
     }
 
     /**

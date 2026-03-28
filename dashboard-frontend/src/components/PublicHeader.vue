@@ -327,12 +327,12 @@ onMounted(() => {
         <div v-else>
           <div class="d-flex justify-content-between align-items-center mb-3">
             <p class="text-danger fw-bold mb-0">
-              Detected {{ dashboard.gaps.length }} days with missing or zero data:
+              Detected {{ dashboard.gaps.length }} days with missing or unexpected zero data:
             </p>
             <div class="d-flex align-items-center me-3">
               <CFormCheck
                 id="forceRepair"
-                label="Force Full Re-sync (Overwrite existing data)"
+                label="Force re-sync even if data already exists"
                 v-model="forceGapRepair"
                 class="me-3"
               />
@@ -346,7 +346,14 @@ onMounted(() => {
                         dashboard.gaps.map((g) => g.date),
                         forceGapRepair,
                       )
-                      alert('Gap repair started: ' + res.message)
+                      const ignoredSummary = (res.ignored_dates || [])
+                        .map((item) => `${item.date}: ${item.reason}`)
+                        .join('\n')
+                      alert(
+                        'Gap repair started: ' +
+                          res.message +
+                          (ignoredSummary ? '\n\nIgnored dates:\n' + ignoredSummary : ''),
+                      )
                       gapsModalVisible = false
                       forceGapRepair = false
                     } catch (e) {
@@ -367,6 +374,7 @@ onMounted(() => {
                 <th>Date</th>
                 <th>Status</th>
                 <th>Reason</th>
+                <th>Raw Visits</th>
               </tr>
             </thead>
             <tbody>
@@ -378,6 +386,7 @@ onMounted(() => {
                   </span>
                 </td>
                 <td>{{ gap.reason }}</td>
+                <td>{{ gap.raw_visits ?? 0 }}</td>
               </tr>
             </tbody>
           </table>

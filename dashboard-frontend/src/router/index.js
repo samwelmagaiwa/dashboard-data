@@ -8,10 +8,9 @@ const routes = [
     path: '/',
     name: 'PublicHome',
     component: PublicLayout,
-    redirect: '/public-dashboard',
     children: [
       {
-        path: '/public-dashboard',
+        path: '',
         name: 'PublicDashboard',
         component: () => import('@/views/dashboard/Dashboard.vue'),
       },

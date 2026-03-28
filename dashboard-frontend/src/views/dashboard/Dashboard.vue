@@ -885,7 +885,11 @@ const formatDate = (dateStr) => {
                         v-if="!dashboard.isDetailedLoading && filteredDetailedClinics.length === 0"
                       >
                         <td colspan="14" class="text-center py-5 text-muted">
-                          No records found for the selected criteria.
+                          {{
+                            dashboard.isSyncing && (dashboard.realStats?.total_detailed || 0) > 0
+                              ? 'Summary data is available. Detailed records are still loading in the background.'
+                              : 'No records found for the selected criteria.'
+                          }}
                         </td>
                       </tr>
                     </tbody>

@@ -18,7 +18,7 @@ onMounted(() => {
 
   const adminRoles = ['ED', 'DED', 'DICT']
   if (!adminRoles.includes(dashboard.user?.role)) {
-    router.push('/public-dashboard')
+    router.push('/')
     return
   }
 

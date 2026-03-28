@@ -66,7 +66,7 @@ class SyncForDateJob implements ShouldQueue
             }
         }
 
-        $result = $syncService->syncForDate($this->date);
+        $result = $syncService->syncForDate($this->date, $this->force);
 
         if (!$result['success']) {
             $error = $result['error'] ?? 'Sync failed';

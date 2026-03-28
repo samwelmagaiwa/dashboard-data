@@ -307,6 +307,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
       if (start_date && end_date) {
         const timestamp = Date.now()
+        const isBackgroundSyncRefresh = silent && !!activeBatchId.value
         if (!silent) {
           isDetailedLoading.value = true
           detailedClinics.value = []
@@ -314,9 +315,10 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
         const period = selectedPeriod.value === 'range' ? 'range' : selectedPeriod.value
         const breakdownParam = breakdownMode.value ? '&breakdown=monthly' : ''
+        const freshParam = isBackgroundSyncRefresh ? '&fresh=1' : ''
 
         const { data } = await api.get(
-          `/dashboard/snapshot?start_date=${start_date}&end_date=${end_date}&period=${period}${breakdownParam}&_t=${timestamp}`,
+          `/dashboard/snapshot?start_date=${start_date}&end_date=${end_date}&period=${period}${breakdownParam}${freshParam}&_t=${timestamp}`,
         )
 
         realStats.value = data.stats.stats
@@ -325,8 +327,12 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
         realClinics.value = data.clinics
         pieStats.value = data.pie
-        fetchGenderRadarStats(silent) // Fetch Radar data in parallel
-        fetchDetailedClinics(silent) // Fetch detailed clinic breakdown
+        if (!isBackgroundSyncRefresh) {
+          fetchGenderRadarStats(silent)
+          fetchDetailedClinics(silent)
+        } else if (detailedClinics.value.length === 0 || (data.stats.stats?.total_detailed || 0) > 0) {
+          fetchDetailedClinics(true, { background: true })
+        }
         compStats.value = data.comparison
         referralStats.value = data.referrals
 
@@ -413,12 +419,14 @@ export const useDashboardStore = defineStore('dashboard', () => {
   }
 
   let lastRefreshedProgress = 0
+  let lastRefreshedProcessedJobs = 0
 
   const pollBatchStatus = async () => {
     if (!activeBatchId.value) return
     try {
       const res = await api.get(`/sync/batch/${activeBatchId.value}`)
       const prevProgress = syncProgress.value
+      const processedJobs = res.data.processed_jobs || 0
       syncProgress.value = res.data.progress
       isSyncWaiting.value = res.data.is_waiting || false
       syncMessage.value = res.data.message || ''
@@ -432,11 +440,18 @@ export const useDashboardStore = defineStore('dashboard', () => {
         isSyncWaiting.value = false
         fetchStats(true) // Final refresh with latest data
         lastRefreshedProgress = 0
+        lastRefreshedProcessedJobs = 0
       } else {
-        // Refresh UI only when meaningful progress occurs (every ~10%)
+        // Refresh often enough to surface partial synced data.
         const progressDelta = res.data.progress - lastRefreshedProgress
-        if (progressDelta >= 10 || (prevProgress === 0 && res.data.progress > 0)) {
+        const processedDelta = processedJobs - lastRefreshedProcessedJobs
+        if (
+          processedDelta >= 5 ||
+          progressDelta >= 3 ||
+          (prevProgress === 0 && res.data.progress > 0)
+        ) {
           lastRefreshedProgress = res.data.progress
+          lastRefreshedProcessedJobs = processedJobs
           fetchStats(true)
         }
         setTimeout(pollBatchStatus, 2000)
@@ -464,12 +479,14 @@ export const useDashboardStore = defineStore('dashboard', () => {
       // Reset dismissed batch so new manual sync is always tracked
       dismissedBatchId.value = null
       lastRefreshedProgress = 0
-      const enqueueRes = await api.get(
-        `/sync/enqueue/range?start_date=${start_date}&end_date=${end_date}&force=true`,
-      )
+      lastRefreshedProcessedJobs = 0
+      const enqueueRes = await api.get(`/sync/enqueue/range?start_date=${start_date}&end_date=${end_date}`)
       activeBatchId.value = enqueueRes.data.batch_id
       syncProgress.value = 0
-      pollBatchStatus()
+      if (enqueueRes.data.batch_id) {
+        fetchStats(true)
+        pollBatchStatus()
+      }
       return {
         ok: true,
         batch_id: activeBatchId.value,
@@ -516,19 +533,24 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   }
 
-  const fetchDetailedClinics = async (silent = false) => {
+  const fetchDetailedClinics = async (silent = false, options = {}) => {
     const { start_date, end_date } = calculateDateRange()
+    const backgroundMode = options.background === true
     if (!silent) isDetailedLoading.value = true
     try {
       // Fetch page 1 first — this gives us immediate data and pagination info
       const response = await api.get('/dashboard/detailed-clinics', {
-        params: { start_date, end_date, per_page: 500, page: 1, _t: Date.now() },
+        params: { start_date, end_date, per_page: 500, page: 1, fresh: backgroundMode ? 1 : 0, _t: Date.now() },
       })
       const firstPageData = response.data.data || []
       const pagination = response.data.pagination
 
       // Set the first page immediately so the UI shows data
       detailedClinics.value = firstPageData
+
+      if (backgroundMode) {
+        return
+      }
 
       // Load more pages in background, but cap at 10 pages (5,000 rows) for table display
       // Summary badges use backend snapshot counts, so they are always accurate
@@ -583,6 +605,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
         ok: true,
         batch_id: activeBatchId.value,
         message: res.data.message || 'Gap repair enqueued',
+        ignored_dates: res.data.ignored_dates || [],
       }
     } catch (error) {
       console.error('[DashboardStore] Error repairing gaps:', error)
