@@ -1,6 +1,13 @@
 # AGENTS.md
 
 This file provides guidance to WARP (warp.dev) when working with code in this repository.
+# to deploy the application use the deploy.sh script
+- `./deploy.sh release`: from local pc to push to docker hub
+- `./deploy.sh deploy`:on the server to deploy the application
+
+
+
+
 
 ## Repo layout (big picture)
 This repo contains two top-level apps:

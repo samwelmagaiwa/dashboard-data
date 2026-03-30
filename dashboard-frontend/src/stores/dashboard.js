@@ -35,9 +35,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const genderRadarData = ref(null)
   const compStats = ref(null)
   const serviceTrendData = ref({ labels: [], datasets: [] })
-  const referralStats = ref([])
-  const realClinics = ref([])
-  const detailedClinics = ref([])
+  const referralStats = ref(null) // null = loading, [] = no data, [items] = has data
+  const realClinics = ref(null) // null = loading, [] = no data
+  const detailedClinics = ref(null) // null = loading, [] = no data
   const isLoading = ref(false)
   const isTrendsLoading = ref(false)
   const isDetailedLoading = ref(false)
@@ -45,7 +45,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const trendDebug = ref('')
   const activeBatchId = ref(localStorage.getItem('mnh_active_batch') || null)
   const syncProgress = ref(0)
-  const gaps = ref([])
+  const gaps = ref(null) // null = loading, [] = no data
   const gapsLoading = ref(false)
   const isRepairing = ref(false)
   const isSyncing = computed(() => !!activeBatchId.value || isRepairing.value)
@@ -295,11 +295,11 @@ export const useDashboardStore = defineStore('dashboard', () => {
         realStats.value = null
         previousStats.value = null
         compLabel.value = ''
-        realClinics.value = []
+        realClinics.value = null
         pieStats.value = null
         compStats.value = null
-        referralStats.value = []
-        serviceTrendData.value = { labels: [], datasets: [] }
+        referralStats.value = null
+        serviceTrendData.value = null
         return
       }
 
@@ -310,12 +310,13 @@ export const useDashboardStore = defineStore('dashboard', () => {
         const isBackgroundSyncRefresh = silent && !!activeBatchId.value
         if (!silent) {
           isDetailedLoading.value = true
-          detailedClinics.value = []
+          detailedClinics.value = null
         }
 
         const period = selectedPeriod.value === 'range' ? 'range' : selectedPeriod.value
         const breakdownParam = breakdownMode.value ? '&breakdown=monthly' : ''
-        const freshParam = isBackgroundSyncRefresh ? '&fresh=1' : ''
+        // Always use fresh=1 to avoid stale cache issues with referral and other data
+        const freshParam = '&fresh=1'
 
         const { data } = await api.get(
           `/dashboard/snapshot?start_date=${start_date}&end_date=${end_date}&period=${period}${breakdownParam}${freshParam}&_t=${timestamp}`,
@@ -574,7 +575,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     } catch (error) {
       console.error('[DashboardStore] Error fetching detailed clinics:', error)
       // Only clear if not silent - avoid flickering stale data away during update
-      if (!silent) detailedClinics.value = []
+      if (!silent) detailedClinics.value = null
     } finally {
       isDetailedLoading.value = false
     }
@@ -783,7 +784,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     () => {
       scheduleFetchStats()
     },
-    { deep: true },
+    { deep: true, immediate: true },
   )
 
   const tableExample = ref([

@@ -64,7 +64,8 @@ const keyReferralMap = {
 
 // Referral stats computed - sorted by count descending
 const referralData = computed(() => {
-  const stats = dashboard.referralStats || []
+  const stats = dashboard.referralStats
+  if (!stats || !Array.isArray(stats)) return [] // Handle null (loading) or invalid data
   return stats.map((item) => {
     // If name is missing or generic, try to map it
     let name = item.name

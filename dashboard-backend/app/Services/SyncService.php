@@ -442,6 +442,9 @@ class SyncService
         }
 
         // 3. Pre-aggregate Referral Stats
+        // Always delete existing referral stats first to prevent duplication
+        DailyReferralStat::where('stat_date', $date)->delete();
+        
         $referralData = Visit::where('visit_date', $date)
             ->whereNotNull('ref_hosp')
             ->where('ref_hosp', '!=', '')
@@ -464,7 +467,7 @@ class SyncService
                 ];
             })->toArray();
 
-            DailyReferralStat::upsert($referralBatch, ['stat_date', 'ref_hosp_code'], ['ref_hosp_name', 'count']);
+            DailyReferralStat::insert($referralBatch);
         }
         
         // Clear dashboard caches for this specific date (versioned keys)
@@ -490,6 +493,9 @@ class SyncService
         $cacheKeys[] = "clinic_breakdown_{$monthStart}_{$monthEnd}_v{$v}";
         $cacheKeys[] = "pie_stats_{$monthStart}_{$monthEnd}_v{$v}";
         $cacheKeys[] = "dashboard_stats_{$yearStart}_{$yearEnd}_v{$v}";
+        // Clear referral_stats for month/year ranges
+        $cacheKeys[] = "referral_stats_{$monthStart}_{$monthEnd}_v{$v}";
+        $cacheKeys[] = "referral_stats_{$yearStart}_{$yearEnd}_v{$v}";
 
         // Also clear service_trends caches (all period types)
         foreach (['day', 'week', 'month', 'year', 'range'] as $period) {
