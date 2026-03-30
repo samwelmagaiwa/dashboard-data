@@ -1,7 +1,8 @@
 <script setup>
-import { onBeforeMount } from 'vue'
+import { onBeforeMount, onMounted } from 'vue'
 import { useColorModes } from '@coreui/vue'
 import { useThemeStore } from '@/stores/theme.js'
+import { initAutoScroll } from '@/composables/useAutoScroll'
 
 const { isColorModeSet, setColorMode } = useColorModes(
   'coreui-free-vue-admin-template-theme',
@@ -26,6 +27,10 @@ onBeforeMount(() => {
   }
 
   setColorMode(currentTheme.theme)
+})
+
+onMounted(() => {
+  initAutoScroll()
 })
 </script>
 

@@ -1,6 +1,7 @@
 <script setup>
 import { defineAsyncComponent, computed, ref, onMounted, watch, onUnmounted } from 'vue'
 import { useDashboardStore } from '@/stores/dashboard'
+import { getAutoScrollState } from '@/composables/useAutoScroll'
 import LoadingBanner from '@/components/LoadingBanner.vue'
 import { CIcon } from '@coreui/icons-vue'
 import {
@@ -32,8 +33,20 @@ import ServiceTrendChart from './ServiceTrendChart.vue'
 const MainChart = defineAsyncComponent(() => import('./MainChart.vue'))
 
 const dashboard = useDashboardStore()
+const autoScroll = getAutoScrollState()
+const isAutoScrollEnabled = computed(() => autoScroll.isEnabled.value)
 const isClinicsVisible = ref(false)
 const hiddenPieCategories = ref([]) // Track hidden categories for pie chart
+
+watch(
+  isAutoScrollEnabled,
+  (enabled) => {
+    if (enabled) {
+      isClinicsVisible.value = false
+    }
+  },
+  { immediate: true },
+)
 
 // Pagination state for clinics table
 const currentPage = ref(1)
@@ -707,8 +720,10 @@ const formatDate = (dateStr) => {
         </CCol>
       </CRow>
 
+      <div data-auto-scroll-boundary class="auto-scroll-boundary-marker"></div>
+
       <!-- Clinic Breakdown Table (Restored) -->
-      <CRow v-if="dashboard.realStats">
+      <CRow v-show="dashboard.realStats && !isAutoScrollEnabled">
         <CCol :md="12">
           <CCard class="border-0 shadow-sm overflow-hidden">
             <CCardHeader
@@ -1131,5 +1146,11 @@ const formatDate = (dateStr) => {
   background-color: rgba(255, 255, 255, 0.1);
   z-index: 2;
   pointer-events: none;
+}
+
+.auto-scroll-boundary-marker {
+  height: 1px;
+  margin: 0;
+  padding: 0;
 }
 </style>

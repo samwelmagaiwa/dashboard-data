@@ -32,7 +32,7 @@ class DashboardController extends Controller
      */
     private function getCacheVersion(): int
     {
-        return config('dashboard.cache_version', 6);
+        return config('dashboard.cache_version', 7);
     }
 
     protected $syncService;
@@ -286,7 +286,6 @@ class DashboardController extends Controller
                 ->selectRaw('clinic_name, SUM(total_visits) as total_visits')
                 ->groupBy('clinic_name')
                 ->orderByDesc('total_visits')
-                ->limit(50)
                 ->get();
 
             $prevCounts = ClinicStat::where('stat_date', '>=', $comparison['start']->toDateString())
@@ -314,7 +313,7 @@ class DashboardController extends Controller
                 $trend = 0.0;
                 if ($prev > 0) {
                     $trend = (($cur - $prev) / $prev) * 100;
-                    $trend = max(-100.0, min(100.0, round($trend, 1)));
+                    $trend = round($trend, 1);
                 } elseif ($cur > 0) {
                     $trend = 100.0;
                 }
@@ -361,9 +360,11 @@ class DashboardController extends Controller
         $perPage = min((int) $request->query('per_page', 500), $maxPerPage);
         $page = (int) $request->query('page', 1);
 
+        // Detailed clinics should ALWAYS be fresh - never serve cached stale data
+        // This prevents the "stats show data but table is empty" issue
         $cacheKey = $this->cacheKey('detailed_clinics', $startDate, $endDate, (string)$page, (string)$perPage);
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
-        $ttl = $isToday ? 60 : 3600;
+        $ttl = $isToday ? 60 : 600;
 
         return $this->rememberUnlessFresh($request, $cacheKey, $ttl, function() use ($startDate, $endDate, $perPage, $page) {
             $query = Visit::where('visit_date', '>=', $startDate)

@@ -368,7 +368,7 @@ const barLabelsPlugin = {
       style="height: 48px"
     >
       <h5 class="mb-0 fw-bold text-primary" style="font-size: 18px">
-        Clinics Distribution Total visits comparison
+        All Clinics Total visits comparison
       </h5>
 
       <!-- Legend (premium pill-style) -->

@@ -24,6 +24,7 @@ import {
 } from '@coreui/vue'
 import CIcon from '@coreui/icons-vue'
 import { useDashboardStore } from '@/stores/dashboard'
+import AutoScrollControl from '@/components/AutoScrollControl.vue'
 import VueDatePicker from '@vuepic/vue-datepicker'
 import '@vuepic/vue-datepicker/dist/main.css'
 import * as XLSX from 'xlsx'
@@ -190,6 +191,7 @@ onMounted(() => {
           <CIcon icon="cil-search" class="me-2" />
           Gaps
         </CButton>
+        <AutoScrollControl class="me-2" />
         <CButton color="primary" @click="modalVisible = true">Export</CButton>
       </CHeaderNav>
 

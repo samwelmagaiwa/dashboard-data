@@ -70,6 +70,19 @@ class SyncService
             "dashboard_snapshot_{$yearStart}_{$yearEnd}_year_monthly_v{$v}",
         ];
 
+        // Clear detailed_clinics cache - need to clear ALL page/per_page combinations
+        // Common per_page values: 100, 250, 500, 1000
+        $perPageValues = [100, 250, 500, 1000];
+        $maxPages = 50;
+        foreach ($perPageValues as $perPage) {
+            for ($page = 1; $page <= $maxPages; $page++) {
+                $keysToForget[] = "detailed_clinics_{$date}_{$date}_{$page}_{$perPage}_v{$v}";
+                $keysToForget[] = "detailed_clinics_{$today}_{$today}_{$page}_{$perPage}_v{$v}";
+                $keysToForget[] = "detailed_clinics_{$monthStart}_{$monthEnd}_{$page}_{$perPage}_v{$v}";
+                $keysToForget[] = "detailed_clinics_{$yearStart}_{$yearEnd}_{$page}_{$perPage}_v{$v}";
+            }
+        }
+
         foreach ($keysToForget as $key) {
             Cache::forget($key);
         }

@@ -19,7 +19,7 @@ class ReportsController extends Controller
         $startDate = $request->query('start_date', Carbon::today()->toDateString());
         $endDate = $request->query('end_date', Carbon::today()->toDateString());
 
-        $v = config('dashboard.cache_version', 6);
+        $v = config('dashboard.cache_version', 7);
         $cacheKey = "report_pending_{$startDate}_{$endDate}_v{$v}";
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 60 : 3600;

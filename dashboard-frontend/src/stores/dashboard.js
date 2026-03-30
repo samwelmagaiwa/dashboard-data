@@ -538,9 +538,10 @@ export const useDashboardStore = defineStore('dashboard', () => {
     const backgroundMode = options.background === true
     if (!silent) isDetailedLoading.value = true
     try {
-      // Fetch page 1 first — this gives us immediate data and pagination info
+      // Always fetch fresh data for detailed clinics to avoid stale cache issues
+      // This ensures the table always shows current data matching the stats
       const response = await api.get('/dashboard/detailed-clinics', {
-        params: { start_date, end_date, per_page: 500, page: 1, fresh: backgroundMode ? 1 : 0, _t: Date.now() },
+        params: { start_date, end_date, per_page: 500, page: 1, fresh: 1, _t: Date.now() },
       })
       const firstPageData = response.data.data || []
       const pagination = response.data.pagination
@@ -560,7 +561,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
         for (let page = 2; page <= maxPages; page++) {
           try {
             const pageResponse = await api.get('/dashboard/detailed-clinics', {
-              params: { start_date, end_date, per_page: 500, page, _t: Date.now() },
+              params: { start_date, end_date, per_page: 500, page, fresh: 1, _t: Date.now() },
             })
             const pageData = pageResponse.data.data || []
             allData.push(...pageData)

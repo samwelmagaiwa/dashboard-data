@@ -4,6 +4,7 @@ import { useColorModes } from '@coreui/vue'
 import { CFormSelect, CFormInput, CButton } from '@coreui/vue'
 import AppBreadcrumb from '@/components/AppBreadcrumb.vue'
 import AppHeaderDropdownAccnt from '@/components/AppHeaderDropdownAccnt.vue'
+import AutoScrollControl from '@/components/AutoScrollControl.vue'
 import { useSidebarStore } from '@/stores/sidebar.js'
 import { useDashboardStore } from '@/stores/dashboard'
 import VueDatePicker from '@vuepic/vue-datepicker'
@@ -251,6 +252,7 @@ const formatWeek = (date) => {
           <CIcon icon="cil-sync" class="me-1" :class="{ 'fa-spin': dashboard.isLoading }" />
           {{ dashboard.isLoading ? 'Syncing...' : 'Sync' }}
         </CButton>
+        <AutoScrollControl />
         <CButton color="warning" size="sm" variant="outline" @click="modalVisible = true"
           >Export</CButton
         >
