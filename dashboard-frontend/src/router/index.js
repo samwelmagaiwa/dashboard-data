@@ -14,11 +14,6 @@ const routes = [
         name: 'PublicDashboard',
         component: () => import('@/views/dashboard/Dashboard.vue'),
       },
-      {
-        path: '/reports',
-        name: 'Reports',
-        component: () => import('@/views/reports/Reports.vue'),
-      },
     ],
   },
   {
@@ -32,6 +27,11 @@ const routes = [
         name: 'Dashboard',
         alias: '/admin-dashboard',
         component: () => import('@/views/dashboard/AdminDashboard.vue'),
+      },
+      {
+        path: '/reports',
+        name: 'Reports',
+        component: () => import('@/views/reports/Reports.vue'),
       },
       {
         path: '/charts',
@@ -75,7 +75,7 @@ const router = createRouter({
 router.beforeEach((to, from, next) => {
   const token = localStorage.getItem('mnh_token')
   const user = JSON.parse(localStorage.getItem('mnh_user') || 'null')
-  const publicRoutes = ['Login', 'PublicDashboard', 'Reports']
+  const publicRoutes = ['Login', 'PublicDashboard']
   const adminRoles = ['ED', 'DED', 'DICT']
 
   // Check if route requires authentication
@@ -85,8 +85,8 @@ router.beforeEach((to, from, next) => {
     return next({ name: 'Login' })
   }
 
-  // Protect admin dashboard
-  if (to.name === 'Dashboard') {
+  // Protect secure admin views
+  if (['Dashboard', 'Reports'].includes(to.name)) {
     if (!token || !user || !adminRoles.includes(user.role)) {
       return next({ name: 'PublicDashboard' })
     }

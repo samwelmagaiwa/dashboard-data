@@ -23,12 +23,12 @@ const pieData = computed(() => {
 
   const categoryColorsMap = {
     FOREIGN: '#00E5FF', // Cyan
-    PUBLIC: '#007bff',
-    NHIF: '#28a745',
-    'IPPM-PRV': '#dc3545',
-    'IPPM-CRD': '#ffc107',
-    'COST-SH': '#6f42c1',
-    NSSF: '#17a2b8',
+    PUBLIC: '#007bff',   // Blue
+    NHIF: '#28a745',     // Green
+    'IPPM-PRV': '#6f42c1', // Purple (matching Dashboard.vue)
+    'IPPM-CRD': '#ffc107', // Amber
+    'COST-SH': '#E12AFB',  // Magenta (user specified)
+    NSSF: '#17a2b8',     // Teal
   }
 
   // Determine background colors (Pie slices)
@@ -146,12 +146,12 @@ const handleLegendClick = (cat) => {
 const legendItems = computed(() => {
   const map = {
     FOREIGN: '#00E5FF', // Cyan
-    PUBLIC: '#007bff',
-    NHIF: '#28a745',
-    'IPPM-PRV': '#dc3545',
-    'IPPM-CRD': '#ffc107',
-    'COST-SH': '#6f42c1',
-    NSSF: '#17a2b8',
+    PUBLIC: '#007bff',   // Blue
+    NHIF: '#28a745',     // Green
+    'IPPM-PRV': '#6f42c1', // Purple (matching Dashboard.vue)
+    'IPPM-CRD': '#ffc107', // Amber
+    'COST-SH': '#E12AFB',  // Magenta (user specified)
+    NSSF: '#17a2b8',     // Teal
   }
 
   // Hex to RGBA helper

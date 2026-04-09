@@ -34,7 +34,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const pieStats = ref(null)
   const genderRadarData = ref(null)
   const compStats = ref(null)
-  const serviceTrendData = ref({ labels: [], datasets: [] })
+  const serviceTrendData = ref(null) // null = loading
   const referralStats = ref(null) // null = loading, [] = no data, [items] = has data
   const realClinics = ref(null) // null = loading, [] = no data
   const detailedClinics = ref(null) // null = loading, [] = no data
@@ -68,6 +68,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const batchesAhead = ref(0)
   const syncMessage = ref('')
   const dismissedBatchId = ref(null)
+  const isInitialized = ref(false) // Track if first load is complete
   let pulseTimer = null
   let initialLoadComplete = false
   let lastSilentRefresh = 0
@@ -278,7 +279,12 @@ export const useDashboardStore = defineStore('dashboard', () => {
     clearSyncStatus()
   }
 
+  let fetchInProgress = false
   const fetchStats = async (silent = false) => {
+    // Prevent concurrent fetches
+    if (fetchInProgress) return
+    fetchInProgress = true
+    
     if (!silent) {
       isLoading.value = true
       isTrendsLoading.value = true
@@ -357,6 +363,11 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
         lastUpdated.value = new Date().toLocaleTimeString()
 
+        // Mark as initialized after first successful fetch
+        if (!isInitialized.value) {
+          isInitialized.value = true
+        }
+
         if (!initialLoadComplete) {
           initialLoadComplete = true
           setTimeout(() => startPulse(), 2000)
@@ -368,6 +379,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     } finally {
       if (!silent) isLoading.value = false
       isTrendsLoading.value = false
+      fetchInProgress = false
     }
   }
 
@@ -882,6 +894,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     selectedYear,
     selectedRange,
     searchTerm,
+    isInitialized,
     realStats,
     previousStats,
     compLabel,

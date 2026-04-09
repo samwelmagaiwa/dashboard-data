@@ -96,7 +96,7 @@ onMounted(() => {
         <CNavItem>
           <CNavLink href="/" class="d-flex align-items-center p-0">
             <img src="@/assets/images/muhilogo.jpg" height="40" class="me-2" alt="Logo" />
-            <span class="fw-bold text-primary d-none d-md-inline">MNH DASHBOARD</span>
+            <span class="fw-bold text-primary d-none d-md-inline">MNH MLOGANZILA DASHBOARD</span>
           </CNavLink>
         </CNavItem>
       </CHeaderNav>
@@ -191,7 +191,16 @@ onMounted(() => {
           <CIcon icon="cil-search" class="me-2" />
           Gaps
         </CButton>
-        <AutoScrollControl class="me-2" />
+        <CDropdown variant="nav-item" :caret="false" class="me-2">
+          <CDropdownToggle color="secondary" variant="outline" class="d-flex align-items-center">
+            <CIcon icon="cil-settings" class="me-2" />
+            Controls
+          </CDropdownToggle>
+          <CDropdownMenu class="p-3 shadow-lg border-0" style="min-width: 350px; border-radius: 16px;">
+            <div class="mb-2 fw-bold text-muted small text-uppercase letter-spacing-1">Page Settings</div>
+            <AutoScrollControl />
+          </CDropdownMenu>
+        </CDropdown>
         <CButton color="primary" @click="modalVisible = true">Export</CButton>
       </CHeaderNav>
 

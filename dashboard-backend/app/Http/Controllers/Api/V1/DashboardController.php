@@ -32,7 +32,7 @@ class DashboardController extends Controller
      */
     private function getCacheVersion(): int
     {
-        return config('dashboard.cache_version', 7);
+        return config('dashboard.cache_version', 9);
     }
 
     protected $syncService;
@@ -318,6 +318,10 @@ class DashboardController extends Controller
                     $trend = 100.0;
                 }
 
+                // Cap trend at +/- 100% to avoid unrealistic percentages in chart
+                if ($trend > 100) $trend = 100.0;
+                if ($trend < -100) $trend = -100.0;
+
                 $interpretation = 'Stable';
                 if ($cur === 0) {
                     $interpretation = 'No Visits';
@@ -563,10 +567,10 @@ class DashboardController extends Controller
         $end = Carbon::parse($endDate);
 
         // --- EXPANSION LOGIC FOR CHART CONTEXT ---
-        // 1. If 'day' is selected (single day range), expand to full week (Mon-Sun)
+        // 1. If 'day' is selected (single day range), expand to rolling 7-day window (ending at selected day)
         if ($period === 'day' && $start->diffInDays($end) == 0 && !$breakdown) {
-            $start = $start->copy()->startOfWeek(Carbon::MONDAY);
-            $end = $end->copy()->endOfWeek(Carbon::SUNDAY);
+            $end = $end->copy();
+            $start = $end->copy()->subDays(6);
         }
 
         // 2. If 'year' is selected, ensure we show full Jan-Dec
@@ -595,13 +599,11 @@ class DashboardController extends Controller
             $effectivePeriod = $period;
             if ($breakdown === 'monthly' || $period === 'year') {
                 $effectivePeriod = 'monthly_breakdown';
-            } elseif ($period === 'range') {
-                if ($days > 180) {
-                    $effectivePeriod = 'monthly_breakdown';
-                } elseif ($days > 45) {
-                    $effectivePeriod = 'week';
+            } elseif ($period === 'range' || $period === 'month' || $period === 'week') {
+                if ($days > 45) {
+                    $effectivePeriod = 'monthly_breakdown'; // Fallback to months for very long custom ranges
                 } else {
-                    $effectivePeriod = 'range'; // Force day-wise for smaller ranges
+                    $effectivePeriod = 'range'; // Show individual days for week, month, and short ranges
                 }
             }
 
@@ -640,7 +642,8 @@ class DashboardController extends Controller
                 case 'range':
                     $tempStart = $start->copy();
                     while ($tempStart <= $end) {
-                        $label = $tempStart->format('d M');
+                        // Use consistent "Weekday - Day" format for all day-wise views
+                        $label = $tempStart->format('l - d');
                         $labels[] = $label;
                         $dataMap[$tempStart->toDateString()] = [
                             'label' => $label,
@@ -742,7 +745,7 @@ class DashboardController extends Controller
                 $gk = (string)$row->group_key;
                 
                 // For the 'month' case (which is now weekly), we need to find which week container the date belongs to
-                if ($period === 'month' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $gk)) {
+                if ($period === 'month' && !isset($dataMap[$gk]) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $gk)) {
                     foreach ($dataMap as $key => $container) {
                         if (isset($container['start']) && isset($container['end'])) {
                             if ($gk >= $container['start'] && $gk <= $container['end']) {
@@ -774,6 +777,7 @@ class DashboardController extends Controller
 
             return [
                 'labels' => $labels,
+                'dates' => array_keys($dataMap),
                 'datasets' => [
                     [
                         'type' => 'line',

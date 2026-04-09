@@ -28,14 +28,6 @@ const getPrevValue = (key) => {
   return (dashboard.previousStats?.[key] || 0).toLocaleString()
 }
 
-const getTrend = (key) => {
-  const current = dashboard.realStats?.[key] || 0
-  const previous = dashboard.previousStats?.[key] || 0
-  if (!previous) return current > 0 ? 100 : 0
-  const trend = ((current - previous) / previous) * 100
-  return Math.round(trend * 10) / 10
-}
-
 const showPendingList = ref(false)
 const pendingPatients = ref([])
 const isListLoading = ref(false)
@@ -101,20 +93,11 @@ watch(
           </div>
           <div
             v-if="dashboard.compLabel"
-            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+            class="stat-card-footer mt-auto pt-1"
           >
             <div class="stat-comparison">
               <span class="prev-value text-muted">{{ getPrevValue('total_patients') }}</span>
               <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
-            </div>
-            <div
-              :class="['trend-pill', getTrend('total_patients') >= 0 ? 'trend-up' : 'trend-down']"
-            >
-              <CIcon
-                :icon="getTrend('total_patients') >= 0 ? cilChevronTop : cilChevronBottom"
-                size="sm"
-              />
-              <span>{{ Math.abs(getTrend('total_patients')) }}%</span>
             </div>
           </div>
         </div>
@@ -160,21 +143,12 @@ watch(
           </div>
           <div
             v-if="dashboard.compLabel"
-            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+            class="stat-card-footer mt-auto pt-1"
             style="position: relative; z-index: 2"
           >
             <div class="stat-comparison">
               <span class="prev-value text-muted">{{ getPrevValue('emergency_visits') }}</span>
               <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
-            </div>
-            <div
-              :class="['trend-pill', getTrend('emergency_visits') >= 0 ? 'trend-up' : 'trend-down']"
-            >
-              <CIcon
-                :icon="getTrend('emergency_visits') >= 0 ? cilChevronTop : cilChevronBottom"
-                size="sm"
-              />
-              <span>{{ Math.abs(getTrend('emergency_visits')) }}%</span>
             </div>
           </div>
         </div>
@@ -199,18 +173,11 @@ watch(
           </div>
           <div
             v-if="dashboard.compLabel"
-            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+            class="stat-card-footer mt-auto pt-1"
           >
             <div class="stat-comparison">
               <span class="prev-value text-muted">{{ getPrevValue('consulted') }}</span>
               <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
-            </div>
-            <div :class="['trend-pill', getTrend('consulted') >= 0 ? 'trend-up' : 'trend-down']">
-              <CIcon
-                :icon="getTrend('consulted') >= 0 ? cilChevronTop : cilChevronBottom"
-                size="sm"
-              />
-              <span>{{ Math.abs(getTrend('consulted')) }}%</span>
             </div>
           </div>
         </div>
@@ -241,18 +208,11 @@ watch(
           </div>
           <div
             v-if="dashboard.compLabel"
-            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+            class="stat-card-footer mt-auto pt-1"
           >
             <div class="stat-comparison">
               <span class="prev-value text-muted">{{ getPrevValue('pending') }}</span>
               <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
-            </div>
-            <div :class="['trend-pill', getTrend('pending') <= 0 ? 'trend-up' : 'trend-down']">
-              <CIcon
-                :icon="getTrend('pending') >= 0 ? cilChevronTop : cilChevronBottom"
-                size="sm"
-              />
-              <span>{{ Math.abs(getTrend('pending')) }}%</span>
             </div>
           </div>
 
@@ -294,18 +254,11 @@ watch(
           </div>
           <div
             v-if="dashboard.compLabel"
-            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+            class="stat-card-footer mt-auto pt-1"
           >
             <div class="stat-comparison">
               <span class="prev-value text-muted">{{ getPrevValue('new_visits') }}</span>
               <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
-            </div>
-            <div :class="['trend-pill', getTrend('new_visits') >= 0 ? 'trend-up' : 'trend-down']">
-              <CIcon
-                :icon="getTrend('new_visits') >= 0 ? cilChevronTop : cilChevronBottom"
-                size="sm"
-              />
-              <span>{{ Math.abs(getTrend('new_visits')) }}%</span>
             </div>
           </div>
         </div>
@@ -328,18 +281,11 @@ watch(
           </div>
           <div
             v-if="dashboard.compLabel"
-            class="stat-card-footer mt-auto pt-1 d-flex justify-content-between align-items-center"
+            class="stat-card-footer mt-auto pt-1"
           >
             <div class="stat-comparison">
               <span class="prev-value text-muted">{{ getPrevValue('followups') }}</span>
               <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
-            </div>
-            <div :class="['trend-pill', getTrend('followups') >= 0 ? 'trend-up' : 'trend-down']">
-              <CIcon
-                :icon="getTrend('followups') >= 0 ? cilChevronTop : cilChevronBottom"
-                size="sm"
-              />
-              <span>{{ Math.abs(getTrend('followups')) }}%</span>
             </div>
           </div>
         </div>
@@ -349,24 +295,6 @@ watch(
 </template>
 
 <style scoped>
-.footer-value-group {
-  display: flex;
-  align-items: baseline;
-  gap: 0.35rem;
-}
-
-.stat-percentage {
-  font-size: 0.85rem;
-  font-weight: 600;
-  padding: 0.1rem 0.4rem;
-  border-radius: 999px;
-  background-color: rgba(0, 0, 0, 0.05);
-}
-
-.text-muted.stat-percentage {
-  background-color: rgba(108, 117, 125, 0.15);
-}
-
 .dropdown-arrow {
   transition: transform 0.3s ease;
   font-size: 0.8rem;
@@ -426,25 +354,6 @@ watch(
   letter-spacing: 0.4px;
 }
 
-.trend-pill {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 6px;
-  border-radius: 12px;
-  font-size: 0.85rem; /* Increased */
-  font-weight: 700;
-}
-
-.trend-up {
-  background-color: rgba(34, 197, 94, 0.1);
-  color: #16a34a;
-}
-
-.trend-down {
-  background-color: rgba(239, 68, 68, 0.1);
-  color: #dc2626;
-}
 .stat-card {
   position: relative; /* Base for absolute positioning */
   transition: all 0.3s ease;

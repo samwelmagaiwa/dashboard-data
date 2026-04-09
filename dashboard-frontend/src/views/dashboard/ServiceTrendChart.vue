@@ -10,6 +10,171 @@ Chart.register(...registerables)
 
 const dashboard = useDashboardStore()
 
+const normalizeTrendLabel = (label) => String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+const getAnchorDate = () => {
+  switch (dashboard.selectedPeriod) {
+    case 'day':
+      return dashboard.selectedDay || new Date()
+    case 'week': {
+      const week = dashboard.selectedWeek
+      return Array.isArray(week) && week[1] ? week[1] : week || new Date()
+    }
+    case 'month': {
+      const monthValue = dashboard.selectedMonth
+      const monthDate =
+        monthValue && typeof monthValue === 'object' && 'month' in monthValue
+          ? new Date(monthValue.year, monthValue.month + 1, 0)
+          : new Date(new Date(monthValue || new Date()).getFullYear(), new Date(monthValue || new Date()).getMonth() + 1, 0)
+      return monthDate
+    }
+    case 'year': {
+      const yearValue = dashboard.selectedYear
+      const year =
+        yearValue && typeof yearValue === 'object' && 'year' in yearValue
+          ? yearValue.year
+          : new Date(yearValue || new Date()).getFullYear()
+      return new Date(year, 11, 31)
+    }
+    case 'range': {
+      const range = dashboard.selectedRange
+      return Array.isArray(range) && range[1] ? range[1] : new Date()
+    }
+    default:
+      return new Date()
+  }
+}
+
+const formatTrendDayLabel = (date) => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  const yesterday = new Date(today)
+  yesterday.setDate(today.getDate() - 1)
+
+  if (date.getTime() === today.getTime()) {
+    return 'Today'
+  }
+
+  if (date.getTime() === yesterday.getTime()) {
+    return 'Yesterday'
+  }
+
+  const weekday = date.toLocaleDateString('en-US', { weekday: 'long' })
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${weekday} - ${day}`
+}
+
+const rawTrendData = computed(() => dashboard.serviceTrendData || { labels: [], datasets: [] })
+
+const normalizedTrendData = computed(() => {
+  const rawData = rawTrendData.value
+
+  if (!rawData?.datasets?.length || !rawData?.labels?.length) {
+    return rawData
+  }
+
+  const period = dashboard.selectedPeriod
+  const isYearly = period === 'year'
+  
+  // Skip normalization for Yearly view (12 months) or breakdown mode
+  if (isYearly || breakdownEnabled.value) {
+    return rawData
+  }
+
+  // --- 1. DATA-DRIVEN MAPPING (Primary Strategy) ---
+  // If backend provides dates array, use it directly to ensure perfect data alignment
+  if (rawData.dates && rawData.dates.length > 0) {
+    const freshLabels = rawData.dates.map((dateStr) => {
+      // Support both Week keys (W1) and ISO dates (YYYY-MM-DD)
+      if (dateStr.startsWith('W')) {
+        return `Week ${dateStr.replace('W', '')}`
+      }
+      const [y, m, d] = dateStr.split('-')
+      const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d))
+      date.setHours(0, 0, 0, 0)
+      const weekday = date.toLocaleDateString('en-US', { weekday: 'short' })
+      const dayStr = String(date.getDate()).padStart(2, '0')
+      return `${dayStr} ${weekday}`
+    })
+
+    // Create a mapping of DateKey -> Index for reliable lookup
+    const dateToIndexMap = new Map()
+    rawData.dates.forEach((date, i) => dateToIndexMap.set(date, i))
+
+    // Reconstruct the data array using the date keys to avoid index-shifting bugs
+    return {
+      ...rawData,
+      labels: freshLabels,
+      datasets: (rawData.datasets || []).map((ds) => ({
+        ...ds,
+        data: rawData.dates.map((dateKey) => {
+          const rawIdx = dateToIndexMap.get(dateKey)
+          return ds.data?.[rawIdx] ?? 0
+        })
+      }))
+    }
+  }
+
+  // --- 2. CALENDAR-BASED RECONSTRUCTION (Fallback/Normalization Strategy) ---
+  const anchor = new Date(getAnchorDate())
+  if (Number.isNaN(anchor.getTime())) return rawData
+  anchor.setHours(0, 0, 0, 0)
+
+  let rangeLength = 7
+  if (period === 'month') {
+    rangeLength = anchor.getDate() 
+  } else if (period === 'range') {
+    const range = dashboard.calculateDateRange()
+    if (range.start_date) {
+       const start = new Date(range.start_date)
+       rangeLength = Math.max(1, Math.round((anchor - start) / (1000 * 60 * 60 * 24)) + 1)
+       if (rangeLength > 45) return rawData 
+    }
+  }
+
+  const targetDates = Array.from({ length: rangeLength }, (_, index) => {
+    const d = new Date(anchor)
+    d.setDate(anchor.getDate() - (rangeLength - 1 - index))
+    return d
+  })
+
+  const targetLabels = targetDates.map((date) => formatTrendDayLabel(date))
+  const labelIndexMap = new Map()
+  
+  if (rawData.dates && rawData.dates.length > 0) {
+    rawData.dates.forEach((date, index) => labelIndexMap.set(date, index))
+  } else {
+    (rawData.labels || []).forEach((label, index) => 
+      labelIndexMap.set(normalizeTrendLabel(label), index)
+    )
+  }
+
+  return {
+    ...rawData,
+    labels: targetLabels,
+    datasets: (rawData.datasets || []).map((dataset) => ({
+      ...dataset,
+      data: targetLabels.map((_, index) => {
+        const date = targetDates[index]
+        const y = date.getFullYear()
+        const m = String(date.getMonth() + 1).padStart(2, '0')
+        const d = String(date.getDate()).padStart(2, '0')
+        
+        const dateKey = `${y}-${m}-${d}`
+        let rawIndex = labelIndexMap.get(dateKey)
+        
+        if (rawIndex === undefined) {
+           const weekday = date.toLocaleDateString('en-US', { weekday: 'short' })
+           rawIndex = labelIndexMap.get(`${d} ${weekday}`)
+        }
+        
+        return rawIndex !== undefined ? (dataset.data?.[rawIndex] ?? 0) : 0
+      }),
+    })),
+  }
+})
+
 // Breakdown toggle state
 const breakdownEnabled = ref(false)
 
@@ -19,55 +184,47 @@ watch(breakdownEnabled, (newVal) => {
 })
 
 // Dynamic width calculations based on breakdown mode and data points
-const MIN_CHART_WIDTH = 600 // minimum chart width
+const MIN_CHART_WIDTH = 600
 
-// Calculate dynamic chart width based on number of labels and breakdown mode
 const chartWidth = computed(() => {
-  const labels = dashboard.serviceTrendData?.labels || []
+  const labels = normalizedTrendData.value?.labels || []
   const numLabels = labels.length
-
-  // More width per point when breakdown is enabled for clearer grouped bars
-  // Increased width per point for chunkier, wider bars
   const widthPerPoint = breakdownEnabled.value ? 250 : 220
   const calculatedWidth = numLabels * widthPerPoint
 
-  // For monthly breakdown (12 months), ensure minimum width fits all bars clearly
   if (breakdownEnabled.value && numLabels === 12) {
-    return Math.max(calculatedWidth, 1600) // Increased from 1400
+    return Math.max(calculatedWidth, 1600)
   }
 
   return Math.max(calculatedWidth, MIN_CHART_WIDTH)
 })
 
-// Determine if scrolling is needed - lower threshold for better visibility
 const needsScroll = computed(() => {
-  const labels = dashboard.serviceTrendData?.labels || []
-  // In breakdown mode, allow checking for better visibility even with fewer items
-  const threshold = 4 // lowered from 7 to ensure week view (7 items) scrolls
+  const labels = normalizedTrendData.value?.labels || []
+  const threshold = 4
   return labels.length > threshold
 })
 
 const metricDetails = [
-  { id: 'trend', label: 'Overall Trend', color: '#1e293b' }, // Dark Slate (Matches line color)
-  { id: 'opd', label: 'Total OPD', color: '#3b82f6' }, // Blue
-  { id: 'emergency', label: 'Emergency', color: '#dc3545' }, // Red
-  { id: 'consulted', label: 'Consulted', color: '#f97316' }, // Orange
-  { id: 'not_consulted', label: 'Not Consulted', color: '#fbbf24' }, // Amber/Yellow
-  { id: 'new', label: 'New Visits', color: '#06b6d4' }, // Cyan/Teal - distinct from blue
-  { id: 'followup', label: 'Follow-ups', color: '#6610f2' }, // Purple
+  { id: 'trend', label: 'Overall Trend', color: '#1e293b' },
+  { id: 'opd', label: 'Total OPD', color: '#3b82f6' },
+  { id: 'emergency', label: 'Emergency', color: '#dc3545' },
+  { id: 'consulted', label: 'Consulted', color: '#f97316' },
+  { id: 'not_consulted', label: 'Not Consulted', color: '#fbbf24' },
+  { id: 'new', label: 'New Visits', color: '#06b6d4' },
+  { id: 'followup', label: 'Follow-ups', color: '#6610f2' },
 ]
 
-// Referral map for known codes that might be missing names
 const keyReferralMap = {
   '000037': 'SELF REFERRAL',
 }
 
-// Referral stats computed - sorted by count descending
+const referralLoading = computed(() => !dashboard.isInitialized || dashboard.referralStats === null)
+
 const referralData = computed(() => {
   const stats = dashboard.referralStats
-  if (!stats || !Array.isArray(stats)) return [] // Handle null (loading) or invalid data
+  if (!stats || !Array.isArray(stats)) return []
   return stats.map((item) => {
-    // If name is missing or generic, try to map it
     let name = item.name
     if ((!name || name.toLowerCase().includes('facility')) && keyReferralMap[item.code]) {
       name = keyReferralMap[item.code]
@@ -80,7 +237,6 @@ const totalReferrals = computed(() => {
   return referralData.value.reduce((sum, item) => sum + (item.count || 0), 0)
 })
 
-// Custom plugin to draw labels on top of bars
 const barLabelsPlugin = {
   id: 'barLabels',
   afterDatasetsDraw(chart) {
@@ -96,66 +252,50 @@ const barLabelsPlugin = {
         const value = dataset.data[index]
         const { x, y } = bar.tooltipPosition()
 
-        // Format value - show 0 if null/undefined/0
         const displayValue =
           value === null || value === undefined || value === 0
             ? '0'
             : new Intl.NumberFormat('en-US').format(value)
 
         ctx.save()
-
         // SPECIAL HANDLING FOR TREND LINE (Index 0)
         if (datasetIndex === 0) {
-          // Draw "Flag" style label: Vertical line up to the TOP of the chart area
-          // This places values "out of the last top horizontal line" as requested
+          // Position labels DIRECTLY ABOVE the data points for better connection
+          const labelY = y - 10
 
-          // Calculate top position (outside the main grid area)
-          const topSpace = 15 // Distance from very top of canvas
-          const labelY = topSpace
-
-          // Draw vertical "dotted/broken dots" line
+          // Draw vertical "dotted" line down TO the point (shorter line)
           ctx.beginPath()
-          ctx.moveTo(x, y) // From data point
-          // Extend up to just below the label (adjusted for 20px font)
-          ctx.lineTo(x, labelY + 28)
-          ctx.strokeStyle = '#94a3b8' // Slate-400 for better visibility
+          ctx.moveTo(x, y - 5) 
+          ctx.lineTo(x, y - 25)
+          ctx.strokeStyle = '#94a3b8' 
           ctx.lineWidth = 1.5
-          ctx.setLineDash([2, 4]) // "Broken dots" style (Short dash, longer gap)
+          ctx.setLineDash([2, 4]) 
           ctx.stroke()
-          ctx.setLineDash([]) // Reset dash
+          ctx.setLineDash([]) 
 
-          // Draw Text at the very top (Larger Font: 20px)
-          ctx.font = `bold 20px 'Outfit', sans-serif`
-          ctx.fillStyle = color // Keep text dark/slate
+          // Draw Text (16px)
+          ctx.font = `bold 16px 'Outfit', sans-serif`
+          ctx.fillStyle = color 
           ctx.textAlign = 'center'
-          ctx.textBaseline = 'top' // Draw from top down
+          ctx.textBaseline = 'bottom' 
 
-          // EXTRA GLOW for top labels
           ctx.shadowColor = 'white'
           ctx.shadowBlur = 4
-          ctx.fillText(displayValue, x, labelY)
+          ctx.fillText(displayValue, x, labelY - 20)
         } else if (datasetIndex === 1) {
-          // SKIP label for "Total OPD" (Index 1)
-          // It is redundant with the Trend Line (Index 0) and causes overlap
           return
         } else {
-          // STANDARD BAR LABEL DRAWING
-          // For zero values, position label at the bottom (x-axis)
           const yPos =
             value === null || value === undefined || value === 0 ? scales.y.bottom - 8 : y - 5
 
-          // Adjust font size - INCREASED sizes
-          // Default: 16px. Breakdown mode dense: 13px minimum
-          const fontSize = isBreakdownMode ? (numLabels > 8 ? 13 : numLabels > 4 ? 14 : 16) : 16
+          const fontSize = isBreakdownMode ? (numLabels > 8 ? 13 : numLabels > 4 ? 14 : 16) : 18 // Slightly larger
           ctx.font = `bold ${fontSize}px 'Outfit', sans-serif`
           ctx.fillStyle = color
           ctx.textAlign = 'center'
           ctx.textBaseline = 'bottom'
-
-          // Enhanced white shadow/glow for maximum legibility on colored bars
           ctx.shadowColor = 'white'
           ctx.shadowBlur = 5
-          ctx.fillText(displayValue, x, yPos + 2) // Shifted down 2px to be closer to bar
+          ctx.fillText(displayValue, x, yPos + 2)
         }
         ctx.restore()
       })
@@ -164,36 +304,61 @@ const barLabelsPlugin = {
 }
 
 const chartData = computed(() => {
-  const rawData = dashboard.serviceTrendData || { labels: [], datasets: [] }
-
+  const rawData = normalizedTrendData.value
   if (!rawData.datasets) return rawData
 
-  // Adjust bar sizing based on breakdown mode and number of data points
-  const numLabels = rawData.labels?.length || 1
+  let barPercentage = 0.95
+  let categoryPercentage = 0.8
 
-  // Dynamic bar sizing for monthly breakdown
-  let barPercentage, categoryPercentage
-  if (breakdownEnabled.value) {
-    // In breakdown mode: Wider bars, smaller gaps
-    barPercentage = 0.95 // Bars take 95% of their allocated space (almost touching)
-    categoryPercentage = 0.8 // Month group takes 80% of slot width (smaller gaps)
-  } else {
-    // Default mode: Significantly chunkier bars
-    barPercentage = 0.95 // Bars take 95% of their group (thick)
-    categoryPercentage = 0.8 // Day group takes 80% of slot (less white space)
-  }
+  const labels = rawData.labels || []
+  const highlightIndexes = new Set()
+  labels.forEach((label, index) => {
+    if (label === 'Today' || label === 'Yesterday') {
+      highlightIndexes.add(index)
+    }
+  })
 
   return {
     ...rawData,
     datasets: rawData.datasets.map((ds, index) => {
       const color = metricDetails[index]?.color || ds.backgroundColor
+      const isTrendDataset = index === 0 || ds.type === 'line'
       return {
         ...ds,
-        backgroundColor: color,
+        backgroundColor: isTrendDataset
+          ? color
+          : labels.map((_, labelIndex) =>
+              highlightIndexes.has(labelIndex) ? `${color}E6` : color,
+            ),
+        borderColor: isTrendDataset
+          ? labels.map((_, labelIndex) =>
+              highlightIndexes.has(labelIndex) ? color : `${color}CC`,
+            )
+          : labels.map((_, labelIndex) =>
+              highlightIndexes.has(labelIndex) ? color : `${color}CC`,
+            ),
+        borderWidth: isTrendDataset
+          ? labels.map((_, labelIndex) => (highlightIndexes.has(labelIndex) ? 4 : 3))
+          : labels.map((_, labelIndex) => (highlightIndexes.has(labelIndex) ? 3 : 1.5)),
         borderRadius: breakdownEnabled.value ? 3 : 4,
         borderSkipped: false,
         barPercentage,
         categoryPercentage,
+        pointRadius: isTrendDataset
+          ? labels.map((_, labelIndex) => (highlightIndexes.has(labelIndex) ? 6 : 4))
+          : ds.pointRadius,
+        pointHoverRadius: isTrendDataset
+          ? labels.map((_, labelIndex) => (highlightIndexes.has(labelIndex) ? 7 : 5))
+          : ds.pointHoverRadius,
+        pointBackgroundColor: isTrendDataset
+          ? labels.map((_, labelIndex) => (highlightIndexes.has(labelIndex) ? '#ffffff' : color))
+          : ds.pointBackgroundColor,
+        pointBorderColor: isTrendDataset
+          ? labels.map((_, labelIndex) => (highlightIndexes.has(labelIndex) ? color : '#ffffff'))
+          : ds.pointBorderColor,
+        pointBorderWidth: isTrendDataset
+          ? labels.map((_, labelIndex) => (highlightIndexes.has(labelIndex) ? 3 : 2))
+          : ds.pointBorderWidth,
       }
     }),
   }
@@ -201,20 +366,14 @@ const chartData = computed(() => {
 
 const maxDataValue = computed(() => {
   let max = 0
-
-  // From chart data (current bars)
-  if (dashboard.serviceTrendData && dashboard.serviceTrendData.datasets) {
-    dashboard.serviceTrendData.datasets.forEach((ds) => {
+  if (normalizedTrendData.value && normalizedTrendData.value.datasets) {
+    normalizedTrendData.value.datasets.forEach((ds) => {
       const dMax = Math.max(...(Array.isArray(ds.data) ? ds.data : [0]))
       if (dMax > max) max = dMax
     })
   }
 
-  // ONLY use card data when NOT in breakdown mode AND we have only 1 label
-  // If we have multiple labels (e.g. 7 days or 12 months), we are showing a distribution,
-  // so we should scale to the distribution peaks, not the total sum.
-  const numLabels = dashboard.serviceTrendData?.labels?.length || 0
-
+  const numLabels = normalizedTrendData.value?.labels?.length || 0
   if (!breakdownEnabled.value && dashboard.realStats && numLabels <= 1) {
     const rs = dashboard.realStats
     const cardValues = [
@@ -228,22 +387,16 @@ const maxDataValue = computed(() => {
     const cardMax = Math.max(...cardValues)
     if (cardMax > max) max = cardMax
   }
-
-  // Add headroom for labels above the bars
-  return max > 0 ? Math.ceil(max * 1.15) : 10
+  return max > 0 ? Math.ceil(max * 1.1) : 10
 })
 
 const chartOptions = computed(() => {
-  const numLabels = dashboard.serviceTrendData?.labels?.length || 1
+  const numLabels = normalizedTrendData.value?.labels?.length || 1
   const isBreakdownMode = breakdownEnabled.value
-
-  // Dynamic X-axis font size based on breakdown mode and number of labels
-  // Dynamic X-axis font size and rotation
   let xFontSize = 20
   let xRotation = 0
 
   if (numLabels > 1) {
-    // Enforce diagonal format for multi-data views (Week, Breakdown, etc)
     xRotation = 45
     if (numLabels > 10) {
       xFontSize = 12
@@ -256,7 +409,7 @@ const chartOptions = computed(() => {
 
   return {
     layout: {
-      padding: { top: 60, bottom: isBreakdownMode ? 20 : 0, left: 10, right: 10 },
+      padding: { top: 40, bottom: isBreakdownMode ? 20 : 0, left: 10, right: 10 },
     },
     plugins: {
       legend: { display: false },
@@ -270,7 +423,6 @@ const chartOptions = computed(() => {
         boxPadding: 6,
         usePointStyle: true,
         callbacks: {
-          // Enhanced tooltip for breakdown mode
           label: (context) => {
             const label = context.dataset.label || ''
             const value = context.raw || 0
@@ -290,6 +442,10 @@ const chartOptions = computed(() => {
           maxRotation: xRotation,
           minRotation: xRotation,
           padding: 12,
+          callback: function (value) {
+            const label = this.getLabelForValue(value)
+            return label === 'Today' || label === 'Yesterday' ? [label, ' '] : label
+          },
         },
       },
       y: {
@@ -329,7 +485,6 @@ const chartOptions = computed(() => {
           </h5>
         </div>
         <div class="d-flex align-items-center gap-3">
-          <!-- Referral Summary in Header -->
           <div
             class="premium-stat-pill d-flex align-items-center shadow-sm border-primary-subtle bg-white"
             style="scale: 0.9; margin: -5px 0"
@@ -339,11 +494,13 @@ const chartOptions = computed(() => {
               style="padding: 4px 8px; font-size: 11px"
               >Total Referrals</span
             >
-            <span class="pill-value text-primary fs-6 px-3">{{
+            <span v-if="referralLoading" class="pill-value text-muted fs-6 px-3">...</span>
+            <span v-else class="pill-value text-primary fs-6 px-3">{{
               totalReferrals.toLocaleString()
             }}</span>
           </div>
           <CBadge
+            v-if="!referralLoading"
             color="primary"
             shape="rounded-pill"
             class="facilities-badge shadow-sm"
@@ -357,9 +514,7 @@ const chartOptions = computed(() => {
 
     <CCardBody class="p-0 border-0">
       <CRow class="m-0 mx-0">
-        <!-- Left Side: Bar Chart + Legend (Stacked on LG, Side-by-Side on XL) -->
-        <CCol :xl="7" :lg="12" class="p-0 border-end bg-white">
-          <!-- Chart Legend Moved to Left Column (Tightened Padding) -->
+        <CCol :xl="9" :lg="12" class="p-0 border-end bg-white">
           <div class="px-4 py-2 bg-light-subtle border-bottom">
             <div
               class="custom-legend d-flex flex-wrap align-items-center gap-3 mb-1 p-2 bg-white rounded-4 shadow-sm border"
@@ -378,7 +533,6 @@ const chartOptions = computed(() => {
                 }}</span>
               </div>
 
-              <!-- Breakdown Toggle Button -->
               <div class="ms-auto">
                 <button
                   type="button"
@@ -399,7 +553,6 @@ const chartOptions = computed(() => {
             </div>
           </div>
 
-          <!-- Subtle top-right sync indicator for the card -->
           <div v-if="dashboard.isSyncing" class="sync-indicator-mini" title="Background syncing in progress...">
             <div class="spinner-border spinner-border-sm text-primary" style="width: 0.8rem; height: 0.8rem;"></div>
           </div>
@@ -455,16 +608,14 @@ const chartOptions = computed(() => {
                 />
               </div>
             </div>
-            <div v-if="needsScroll" class="scroll-hint text-muted small mt-2 text-center">
-              <i class="cil-swap-horizontal me-1"></i>
-              Scroll horizontally to see all {{ chartData.labels?.length }}
-              {{ breakdownEnabled ? 'months' : 'data points' }}
-            </div>
+              <div v-if="needsScroll" class="scroll-hint text-muted small mt-2 text-center">
+                <CIcon :icon="cilChart" size="sm" class="me-1" />
+                Scroll horizontally to see full range
+              </div>
           </div>
         </CCol>
 
-        <!-- Right Side: Referral Distribution (Stacked on LG, Side-by-Side on XL) -->
-        <CCol :xl="5" :lg="12" class="p-0 bg-light-subtle">
+        <CCol :xl="3" :lg="12" class="p-0 bg-light-subtle">
           <div
             class="referral-container"
             :style="{ height: breakdownEnabled ? '660px' : '580px', overflowY: 'auto' }"
@@ -484,58 +635,56 @@ const chartOptions = computed(() => {
                 <table class="table table-hover align-middle mb-0 referral-table">
                   <thead class="table-light">
                     <tr>
-                      <th class="ps-3 py-3 text-uppercase" style="font-size: 11px; width: 70px">
-                        Code
-                      </th>
-                      <th class="py-3 text-uppercase" style="font-size: 11px">Hospital Name</th>
+                      <th class="py-2 text-uppercase" style="font-size: 11px">Hospital Name</th>
                       <th
-                        class="py-3 text-uppercase"
-                        style="font-size: 11px; width: 60px; text-align: center"
+                        class="py-2 text-uppercase"
+                        style="font-size: 11px; width: 50px; text-align: center"
                       >
                         %
                       </th>
                       <th
-                        class="text-end pe-3 py-3 text-uppercase"
-                        style="font-size: 11px; width: 70px"
+                        class="text-end pe-3 py-2 text-uppercase"
+                        style="font-size: 11px; width: 120px; white-space: nowrap"
                       >
-                        QTY
+                        Number of Patients
                       </th>
                     </tr>
                   </thead>
                   <tbody class="bg-white">
-                    <tr v-for="(hosp, index) in referralData" :key="hosp.code" class="referral-row">
-                      <td class="ps-3 py-3">
-                        <code
-                          class="bg-primary-subtle px-2 py-1 rounded text-primary fw-bold"
-                          style="font-size: 11px"
-                        >
-                          {{ hosp.code || '—' }}
-                        </code>
-                      </td>
-                      <td class="py-3">
-                        <span
-                          v-if="hosp.name && hosp.name.trim()"
-                          class="fw-bold text-dark text-truncate d-inline-block"
-                          style="font-size: 13px; max-width: 155px"
-                          :title="hosp.name"
-                        >
-                          {{ hosp.name }}
-                        </span>
-                        <span
-                          v-else
-                          class="facility-code-name fw-semibold text-truncate d-inline-block"
-                          style="font-size: 12px; max-width: 180px"
-                          :title="'Facility ' + hosp.code"
-                        >
-                          Facility {{ hosp.code }}
-                        </span>
+                    <tr v-for="(hosp, index) in referralData" :key="hosp.code" 
+                      class="referral-row" 
+                      :class="[
+                        index % 2 === 0 ? 'even-row' : 'odd-row',
+                        index === 0 ? 'top-referral-row' : ''
+                      ]"
+                    >
+                      <td class="py-2 position-relative">
+                        <div v-if="index === 0" class="top-badge" style="top: -2px; left: 10px;">TOP #1</div>
+                        <div class="d-flex align-items-center gap-2">
+                          <span
+                            v-if="hosp.name && hosp.name.trim()"
+                            class="fw-bold text-dark"
+                            style="font-size: 13px"
+                            :title="hosp.name"
+                          >
+                            {{ hosp.name }}
+                          </span>
+                          <span
+                            v-else
+                            class="facility-code-name fw-semibold text-muted"
+                            style="font-size: 12px"
+                            :title="'Facility ' + hosp.code"
+                          >
+                            Facility {{ hosp.code }}
+                          </span>
+                        </div>
                       </td>
                       <td
                         style="
                           text-align: center;
                           vertical-align: middle;
-                          padding-top: 10px;
-                          padding-bottom: 10px;
+                          padding-top: 6px;
+                          padding-bottom: 6px;
                         "
                       >
                         <span class="fw-bold" style="font-size: 16px; color: #4f46e5">
@@ -546,7 +695,7 @@ const chartOptions = computed(() => {
                           }}
                         </span>
                       </td>
-                      <td class="text-end pe-3 py-3">
+                      <td class="text-end pe-3 py-2" style="width: 120px">
                         <div class="d-flex flex-column align-items-end gap-1">
                           <span class="fw-bold text-primary" style="font-size: 15px">{{
                             (hosp.count || 0).toLocaleString()
@@ -574,7 +723,7 @@ const chartOptions = computed(() => {
                 v-else
                 class="d-flex flex-column align-items-center justify-content-center py-5 opacity-50"
               >
-                <CIcon icon="cil-hospital" size="xl" class="mb-2" />
+                <CIcon :icon="cilHospital" size="xl" class="mb-2" />
                 <p class="small">No referral data found</p>
               </div>
             </div>
@@ -642,312 +791,124 @@ const chartOptions = computed(() => {
   color: #64748b;
   font-weight: 700;
   letter-spacing: 0.5px;
-  padding-top: 15px;
-  padding-bottom: 15px;
-  border-bottom: 2px solid #f1f5f9;
-}
-
-.referral-table tbody tr {
-  transition: background 0.2s ease;
-  border-bottom: 1px solid #f8fafc;
-}
-
-.referral-table tbody tr:last-child {
-  border-bottom: none;
-}
-
-.referral-table td {
-  padding-top: 10px;
-  padding-bottom: 10px;
-  font-size: 12px;
+  border-bottom: 2px solid #e2e8f0;
 }
 
 .referral-row {
   transition: all 0.2s ease;
+  border-left: 3px solid transparent;
+}
+
+.referral-row.even-row td {
+  background-color: #f1f5f9 !important; /* Force visibility even without hover */
+}
+
+.referral-row.odd-row td {
+  background-color: #ffffff !important;
 }
 
 .referral-row:hover {
-  background-color: rgba(59, 130, 246, 0.05) !important;
+  background-color: rgba(59, 130, 246, 0.1) !important;
+  border-left-color: #3b82f6;
+  transform: translateX(2px);
 }
 
-.top-referral {
-  background-color: rgba(59, 130, 246, 0.02);
+.top-referral-row {
+  border-left-color: #4f46e5;
+  background-color: rgba(79, 70, 229, 0.03) !important;
 }
 
-.rank-badge {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
+.top-badge {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  font-size: 8px;
+  background: #4f46e5;
   color: white;
-  flex-shrink: 0;
-}
-
-.bg-orange {
-  background-color: #cd7f32 !important;
-}
-
-.fw-600 {
-  font-weight: 600;
-}
-
-.progress {
-  background-color: #f1f5f9;
-  border-radius: 10px;
-  overflow: hidden;
-}
-
-.header-title {
-  font-family: 'Outfit', sans-serif;
-  letter-spacing: -0.5px;
-  color: #0f172a !important;
-}
-
-.header-subtitle {
-  font-family: 'Outfit', sans-serif;
-  font-weight: 500;
-}
-
-/* Legend Styles */
-.legend-item {
-  cursor: default;
-  transition: opacity 0.2s;
-}
-
-.legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.legend-label {
-  font-size: 11px;
-  font-weight: 700;
-  color: #64748b;
-  font-family: 'Outfit', sans-serif;
-  white-space: nowrap;
-}
-
-/* Scrolling Styles */
-.scroll-wrapper {
-  overflow-x: auto;
-  overflow-y: visible;
-  padding-bottom: 20px;
-  padding-top: 40px;
-}
-
-.scroll-wrapper::-webkit-scrollbar {
-  height: 6px;
-}
-
-.scroll-wrapper::-webkit-scrollbar-track {
-  background: #e2e8f0;
-  border-radius: 10px;
-}
-
-.scroll-wrapper::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 10px;
-}
-
-.scroll-wrapper::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
-}
-
-.empty-state {
-  min-height: 300px;
-  background: rgba(248, 250, 252, 0.5);
-  border-radius: 20px;
-  border: 1px dashed rgba(203, 213, 225, 0.8);
-}
-
-.chart-viewport {
-  transition: width 0.4s ease;
-}
-
-/* Horizontal Scroll for Chart */
-.chart-scroll-wrapper {
-  width: 100%;
-  height: 100%;
-}
-
-.chart-scroll-wrapper.has-scroll {
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 12px;
-}
-
-.chart-scroll-wrapper.has-scroll::-webkit-scrollbar {
-  height: 8px;
-}
-
-.chart-scroll-wrapper.has-scroll::-webkit-scrollbar-track {
-  background: #f1f5f9;
-  border-radius: 10px;
-}
-
-.chart-scroll-wrapper.has-scroll::-webkit-scrollbar-thumb {
-  background: linear-gradient(135deg, #3b82f6, #6366f1);
-  border-radius: 10px;
-}
-
-.chart-scroll-wrapper.has-scroll::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(135deg, #2563eb, #4f46e5);
-}
-
-/* Breakdown mode specific styles */
-.chart-scroll-wrapper.breakdown-mode {
-  transition: all 0.3s ease;
-}
-
-.chart-scroll-wrapper.breakdown-mode.has-scroll {
-  padding-bottom: 16px;
-}
-
-.chart-scroll-wrapper.breakdown-mode::-webkit-scrollbar {
-  height: 10px;
-}
-
-.chart-scroll-wrapper.breakdown-mode::-webkit-scrollbar-thumb {
-  background: linear-gradient(135deg, #10b981, #059669);
-}
-
-.chart-inner {
-  min-width: 100%;
-  transition: all 0.3s ease;
-}
-
-.scroll-hint {
-  color: #94a3b8;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-/* Chart container transition */
-.chart-container {
-  transition: height 0.3s ease;
-}
-
-.facility-code-name {
-  color: #64748b;
-  font-style: italic;
-}
-
-/* Breakdown Toggle Button - Pill Style */
-.breakdown-pill-btn {
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 25px;
-  padding: 0;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  font-family: 'Outfit', sans-serif;
-  overflow: hidden;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  height: 34px;
-}
-
-.breakdown-pill-btn:hover {
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
-  border-color: #93c5fd;
-}
-
-.breakdown-pill-btn .pill-left {
-  background: linear-gradient(135deg, #4f46e5, #3b82f6);
-  color: white;
-  padding: 0 14px;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  font-weight: 700;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  white-space: nowrap;
-}
-
-.breakdown-pill-btn .pill-right {
-  background: white;
-  color: #64748b;
-  padding: 0 14px;
-  height: 100%;
-  display: flex;
-  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
   font-weight: 800;
-  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transform: translateY(-50%);
+  z-index: 1;
+  box-shadow: 0 2px 4px rgba(79, 70, 229, 0.2);
+}
+
+.premium-stat-pill {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  overflow: hidden;
   transition: all 0.3s ease;
 }
 
-.breakdown-pill-btn .pill-right.on {
-  color: #10b981;
-  background: linear-gradient(135deg, #ecfdf5, #d1fae5);
-}
-
-.breakdown-pill-btn.active {
-  border-color: #10b981;
-  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
-}
-
-.breakdown-pill-btn.active .pill-left {
-  background: linear-gradient(135deg, #059669, #10b981);
-}
-
-/* Premium Stat Pill */
-.premium-stat-pill {
-  background: white;
-  border: 1px solid #e2e8f0;
-  border-radius: 20px;
-  overflow: hidden;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-  font-family: 'Outfit', sans-serif;
-  height: 32px; /* Increased from 24px */
+.premium-stat-pill:hover {
+  border-color: #3b82f6;
+  transform: translateY(-1px);
 }
 
 .pill-label {
-  background: #f8fafc;
-  color: #64748b;
-  font-size: 11px; /* Increased from 9px */
-  font-weight: 700;
-  padding: 0 12px;
-  text-transform: uppercase;
-  height: 100%;
-  display: flex;
-  align-items: center;
   border-right: 1px solid #e2e8f0;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 
-.pill-value {
+.breakdown-pill-btn {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 30px;
+  padding: 2px;
+  transition: all 0.3s ease;
+}
+
+.breakdown-pill-btn.active {
+  background: #dbeafe;
+  border-color: #3b82f6;
+}
+
+.pill-left {
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+}
+
+.active .pill-left {
   color: #2563eb;
-  font-size: 16px; /* Increased from 11px */
-  font-weight: 800;
-  padding: 0 14px;
-  height: 100%;
-  display: flex;
-  align-items: center;
 }
 
-.facilities-badge {
-  font-size: 13px !important; /* Increased from 10px */
-  padding: 6px 12px !important;
-  font-weight: 700 !important;
-}
-
-.rank-badge {
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
+.pill-right {
+  background: #94a3b8;
+  color: white;
+  padding: 4px 10px;
+  border-radius: 20px;
   font-size: 10px;
   font-weight: 800;
-  color: white;
+  min-width: 40px;
+  text-align: center;
+}
+
+.pill-right.on {
+  background: #3b82f6;
+}
+
+.chart-scroll-wrapper {
+  overflow-x: auto;
+  border-radius: 12px;
+  padding-bottom: 10px;
+  height: 100%; /* Ensure it fills the container and aligns from bottom */
+}
+
+.chart-scroll-wrapper.has-scroll::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 40px;
+  background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.8));
+  pointer-events: none;
 }
 </style>
