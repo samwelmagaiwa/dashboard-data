@@ -578,6 +578,9 @@ const formatDate = (dateStr) => {
           <DashboardClinicBarChart />
         </CCol>
       </CRow>
+      
+      <!-- Auto-scroll boundary marker - last section -->
+      <div data-auto-scroll-boundary style="height: 1px;"></div>
     </div>
   </div>
 </template>

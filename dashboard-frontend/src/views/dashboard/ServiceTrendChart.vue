@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { CChartBar } from '@coreui/vue-chartjs'
 import { useDashboardStore } from '@/stores/dashboard'
 import { Chart, registerables } from 'chart.js'
@@ -9,6 +9,49 @@ import { cilHospital, cilChart, cilBarChart } from '@coreui/icons'
 Chart.register(...registerables)
 
 const dashboard = useDashboardStore()
+
+// Ref for chart scroll container
+const chartScrollRef = ref(null)
+
+// Auto-scroll to show "Today" data on mount and when data changes
+const scrollToToday = () => {
+  // Try multiple times with increasing delays to ensure DOM is ready
+  const tryScroll = (attempt) => {
+    if (attempt > 3) return
+    
+    const container = chartScrollRef.value
+    if (!container) {
+      setTimeout(() => tryScroll(attempt + 1), 200 * attempt)
+      return
+    }
+    
+    const labels = normalizedTrendData.value?.labels || []
+    const widthPerPoint = breakdownEnabled.value ? 250 : 220
+    
+    // Calculate position to show rightmost data (Today)
+    // Use scrollWidth - clientWidth to scroll to max right
+    const maxScroll = container.scrollWidth - container.clientWidth
+    
+    if (maxScroll > 0) {
+      container.scrollLeft = maxScroll
+      console.log('[Chart] Scroll attempt', attempt, '- maxScroll:', maxScroll)
+    } else {
+      // Retry if not ready
+      setTimeout(() => tryScroll(attempt + 1), 200 * attempt)
+    }
+  }
+  
+  tryScroll(1)
+}
+
+// Watch for data changes and scroll to today
+watch([() => normalizedTrendData.value, () => dashboard.selectedPeriod], () => {
+  scrollToToday()
+}, { deep: true })
+
+onMounted(() => {
+  scrollToToday()
+})
 
 const normalizeTrendLabel = (label) => String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 
@@ -584,6 +627,7 @@ const chartOptions = computed(() => {
             <div
               class="chart-scroll-wrapper"
               :class="{ 'has-scroll': needsScroll, 'breakdown-mode': breakdownEnabled }"
+              ref="chartScrollRef"
             >
               <div
                 class="chart-inner"

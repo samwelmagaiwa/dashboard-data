@@ -4,17 +4,19 @@ const STORAGE_ENABLED_KEY = 'dashboard:auto-scroll:enabled'
 const STORAGE_SPEED_KEY = 'dashboard:auto-scroll:speed'
 const DEFAULT_SPEED = 'slow'
 const SPEED_MAP = {
-  slow: 24,
-  medium: 38,
-  fast: 54,
+  slow: 20,
+  medium: 35,
+  fast: 50,
 }
 
 const isEnabled = ref(false)
 const speed = ref(DEFAULT_SPEED)
 
-let frameId = null
-let lastTimestamp = 0
+let scrollIntervalId = null
 let initialized = false
+let trackedPosition = 0
+let cachedMaxScroll = 0 // Cache the max scroll limit
+let isResetting = false // Cooldown flag after reset
 
 const pixelsPerSecond = computed(() => SPEED_MAP[speed.value] || SPEED_MAP[DEFAULT_SPEED])
 
@@ -22,121 +24,159 @@ const canUseDom = () => typeof window !== 'undefined' && typeof document !== 'un
 
 const getScrollRoot = () => {
   if (!canUseDom()) return null
-
-  const candidates = [
-    document.scrollingElement,
-    document.documentElement,
-    document.body,
-  ].filter(Boolean)
-
-  return (
-    candidates.find((element) => element.scrollHeight > element.clientHeight) ||
-    document.scrollingElement ||
-    document.documentElement ||
-    document.body
-  )
+  return document.documentElement.scrollHeight > document.documentElement.clientHeight 
+    ? document.documentElement 
+    : document.body
 }
 
-const getAbsoluteTop = (element) => {
-  let top = 0
-  let current = element
+const getScrollLimit = (forceRefresh = false) => {
+  if (!canUseDom()) return 0
+  
+  // Return cached value unless forced to refresh
+  if (!forceRefresh && cachedMaxScroll > 0) {
+    return cachedMaxScroll
+  }
+  
+  // Get the physical maximum the browser can scroll
+  const root = getScrollRoot()
+  if (!root) return 0
+  
+  const scrollHeight = root.scrollHeight
+  const clientHeight = root.clientHeight || window.innerHeight
+  const physicalMax = Math.max(scrollHeight - clientHeight, 0)
+  
+  // Try to find boundary marker (last section)
+  const boundary = document.querySelector('[data-auto-scroll-boundary]')
+  
+  if (boundary) {
+    const boundaryRect = boundary.getBoundingClientRect()
+    const header = document.querySelector('.header, header, .sticky-top')
+    const headerHeight = header ? header.getBoundingClientRect().height : 0
+    const boundaryTop = boundaryRect.top + window.scrollY
+    const scrollableToBoundary = Math.max(boundaryTop - headerHeight - 20, 0)
+    
+    if (scrollableToBoundary > 100) {
+      // Use MINIMUM of boundary and physical limit
+      const finalLimit = Math.min(scrollableToBoundary, physicalMax)
+      cachedMaxScroll = finalLimit
+      console.log('[AutoScroll] Calculated max:', finalLimit)
+      return finalLimit
+    }
+  }
+  
+  // Fallback to physical max and cache it
+  cachedMaxScroll = physicalMax
+  console.log('[AutoScroll] Using physical max:', physicalMax)
+  return physicalMax
+}
 
-  while (current) {
-    top += current.offsetTop || 0
-    current = current.offsetParent
+// Force refresh on window resize
+if (canUseDom()) {
+  window.addEventListener('resize', () => {
+    cachedMaxScroll = 0 // Invalidate cache on resize
+  })
+}
+
+const doScroll = () => {
+  if (!canUseDom() || !isEnabled.value) {
+    stopScroll()
+    return
   }
 
-  return top
-}
-
-const getScrollLimit = (scrollRoot) => {
-  if (!canUseDom() || !scrollRoot) return 0
-
-  const stopElement = document.querySelector('[data-auto-scroll-boundary]')
-  const naturalMax = Math.max(scrollRoot.scrollHeight - window.innerHeight, 0)
-
-  if (!stopElement) {
-    return naturalMax
-  }
-
-  const header = document.querySelector(
-    '.header.position-sticky, .header.sticky-top, header.position-sticky, header.sticky-top',
-  )
-  const headerHeight = header ? Math.ceil(header.getBoundingClientRect().height) : 0
-  const stopTop = getAbsoluteTop(stopElement)
-  const safetyBuffer = 12
-  const limitedMax = Math.max(stopTop - headerHeight - safetyBuffer, 0)
-
-  return Math.min(limitedMax, naturalMax)
-}
-
-const scrollToTop = () => {
-  const scrollRoot = getScrollRoot()
-  if (!scrollRoot || !canUseDom()) return
-
-  scrollRoot.scrollTop = 0
-  window.scrollTo(0, 0)
-  lastTimestamp = 0
-}
-
-const stop = () => {
-  if (frameId !== null && canUseDom()) {
-    window.cancelAnimationFrame(frameId)
-  }
-
-  frameId = null
-  lastTimestamp = 0
-}
-
-const step = (timestamp) => {
-  if (!isEnabled.value || !canUseDom()) {
-    stop()
+  // During cooldown after reset, skip this tick
+  if (isResetting) {
+    isResetting = false
+    console.log('[AutoScroll] Cooldown tick - skipping')
     return
   }
 
   const scrollRoot = getScrollRoot()
   if (!scrollRoot) {
-    stop()
+    stopScroll()
     return
   }
 
-  const maxScrollTop = getScrollLimit(scrollRoot)
-  if (maxScrollTop <= 0) {
-    frameId = window.requestAnimationFrame(step)
+  // Use cached maxScroll (refreshed less frequently)
+  const maxScroll = getScrollLimit()
+  
+  // Check if our tracked position has reached or exceeded the bottom
+  if (trackedPosition >= maxScroll) {
+    console.log('[AutoScroll] >>> AT BOTTOM - RESETTING TO TOP <<<')
+    trackedPosition = 0
+    
+    // Force reset to absolute top - ALL methods
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+    document.documentElement.scrollTop = 0
+    document.documentElement.scrollLeft = 0
+    document.body.scrollTop = 0
+    document.body.scrollLeft = 0
+    
+    // Set cooldown to skip next tick
+    isResetting = true
+    
+    // Force refresh maxScroll on next loop
+    cachedMaxScroll = 0
+    
+    return
+  }
+  
+  // Calculate next position
+  const scrollAmount = pixelsPerSecond.value / 60
+  const nextPosition = trackedPosition + scrollAmount
+  
+  // If next position would exceed max, reset immediately instead
+  if (nextPosition >= maxScroll) {
+    console.log('[AutoScroll] >>> WOULD EXCEED - RESETTING TO TOP <<<')
+    trackedPosition = 0
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+    document.documentElement.scrollTop = 0
+    document.documentElement.scrollLeft = 0
+    document.body.scrollTop = 0
+    document.body.scrollLeft = 0
+    
+    // Set cooldown to skip next tick
+    isResetting = true
+    
+    // Force refresh maxScroll on next loop
+    cachedMaxScroll = 0
+    
     return
   }
 
-  const currentScrollTop = scrollRoot.scrollTop || window.scrollY || 0
-  if (currentScrollTop >= maxScrollTop) {
-    scrollToTop()
-    frameId = window.requestAnimationFrame(step)
-    return
+  // Normal scroll - update BOTH elements for consistency
+  trackedPosition = nextPosition
+  window.scrollTo(0, trackedPosition)
+  document.documentElement.scrollTop = trackedPosition
+  document.body.scrollTop = trackedPosition
+}
+
+const stopScroll = () => {
+  if (scrollIntervalId !== null && canUseDom()) {
+    clearInterval(scrollIntervalId)
   }
-
-  if (!lastTimestamp) {
-    lastTimestamp = timestamp
-  }
-
-  const deltaSeconds = (timestamp - lastTimestamp) / 1000
-  lastTimestamp = timestamp
-
-  const nextScrollTop = Math.min(currentScrollTop + pixelsPerSecond.value * deltaSeconds, maxScrollTop)
-
-  if (nextScrollTop >= maxScrollTop) {
-    // Immediate reset if we reach the limit
-    scrollToTop()
-  } else {
-    scrollRoot.scrollTop = nextScrollTop
-    window.scrollTo(0, nextScrollTop)
-  }
-
-  frameId = window.requestAnimationFrame(step)
+  scrollIntervalId = null
 }
 
 const start = () => {
   if (!canUseDom()) return
-  stop()
-  frameId = window.requestAnimationFrame(step)
+  stopScroll()
+  trackedPosition = 0
+  cachedMaxScroll = 0 // Reset cache
+  isResetting = true // Start with cooldown
+  
+  // Force to top immediately
+  window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  document.documentElement.scrollTop = 0
+  document.body.scrollTop = 0
+  
+  // Pre-calculate the max scroll limit
+  getScrollLimit(true)
+  
+  scrollIntervalId = setInterval(doScroll, 1000 / 60)
+}
+
+const stop = () => {
+  stopScroll()
 }
 
 const applyState = () => {
@@ -146,7 +186,12 @@ const applyState = () => {
   window.localStorage.setItem(STORAGE_SPEED_KEY, speed.value)
 
   if (isEnabled.value) {
-    scrollToTop()
+    // Reset to top before starting
+    const scrollRoot = getScrollRoot()
+    if (scrollRoot) {
+      scrollRoot.scrollTop = 0
+      window.scrollTo(0, 0)
+    }
     start()
   } else {
     stop()
