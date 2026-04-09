@@ -539,11 +539,11 @@ const chartOptions = computed(() => {
                   class="breakdown-pill-btn d-flex align-items-center"
                   :class="{ active: breakdownEnabled }"
                   @click="breakdownEnabled = !breakdownEnabled"
-                  :title="breakdownEnabled ? 'Switch to default view' : 'Show monthly breakdown'"
+                  :title="breakdownEnabled ? 'Compress view' : 'Expand to monthly breakdown'"
                 >
                   <span class="pill-left">
                     <CIcon :icon="cilBarChart" size="sm" class="me-1" />
-                    Monthly Breakdown
+                    {{ breakdownEnabled ? 'Expand' : 'Compress' }}
                   </span>
                   <span class="pill-right" :class="{ on: breakdownEnabled }">
                     {{ breakdownEnabled ? 'ON' : 'OFF' }}
