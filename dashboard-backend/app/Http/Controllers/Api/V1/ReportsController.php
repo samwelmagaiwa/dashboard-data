@@ -65,12 +65,33 @@ class ReportsController extends Controller
                 ->limit(200)
                 ->get();
 
+            // 4. Enrich list with ICD Metadata
+            $allCodes = collect();
+            $delimiters = '/[\$,;]/'; // Split by $, comma, or semicolon
+
+            foreach ($list as $visit) {
+                if ($visit->prov_diag) {
+                    $codes = preg_split($delimiters, $visit->prov_diag, -1, PREG_SPLIT_NO_EMPTY);
+                    $allCodes = $allCodes->concat(array_map('trim', $codes));
+                }
+                if ($visit->final_diag) {
+                    $codes = preg_split($delimiters, $visit->final_diag, -1, PREG_SPLIT_NO_EMPTY);
+                    $allCodes = $allCodes->concat(array_map('trim', $codes));
+                }
+            }
+
+            $uniqueCodes = $allCodes->unique()->filter()->values();
+            $icdMetadata = \App\Models\Icd::whereIn('code', $uniqueCodes)
+                ->get(['code', 'description', 'abbreviation'])
+                ->keyBy('code');
+
             return response()->json([
                 'status' => 'success',
                 'data' => [
                     'by_clinic' => $byClinic,
                     'aging' => $aging,
-                    'list' => $list
+                    'list' => $list,
+                    'diagnosis_metadata' => $icdMetadata
                 ]
             ]);
         });

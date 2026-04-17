@@ -5,6 +5,8 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 - `./deploy.sh release`: from local pc to push to docker hub
 - `./deploy.sh deploy`:on the server to deploy the application
 
+The import command `docker exec dashboard-data-dashboard_backend-1 php artisan icd:import` can be re-run safely if the CSV is updated in the future.
+
 
 
 

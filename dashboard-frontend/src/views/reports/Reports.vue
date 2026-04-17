@@ -140,6 +140,33 @@ watch(
   },
 )
 
+const expandedRows = ref([])
+
+const toggleRowExpansion = (index) => {
+  if (expandedRows.value.includes(index)) {
+    expandedRows.value = expandedRows.value.filter((i) => i !== index)
+  } else {
+    expandedRows.value.push(index)
+  }
+}
+
+const cleanDiagnosisCodes = (codeString) => {
+  if (!codeString) return ''
+  return codeString.split(/[\$,;]/).map(c => c.trim()).filter(Boolean).join(', ')
+}
+
+const getDiagnosisNames = (codeString, isExpanded) => {
+  if (!codeString) return ''
+  // Handle multiple delimiters ($, ,, ;) and trim
+  const codes = codeString.split(/[\$,;]/).map(c => c.trim()).filter(Boolean)
+  const names = codes.map((code) => {
+    const meta = dashboard.diagnosisMetadata[code]
+    if (!meta) return code
+    return isExpanded ? meta.description : meta.abbreviation || code
+  })
+  return names.join(', ')
+}
+
 onMounted(() => {
   if (!dashboard.isInitialized) {
     refreshData()
@@ -249,20 +276,21 @@ onMounted(() => {
                   <thead class="sticky-top">
                     <tr>
                       <!-- Header Color Groups from Image -->
-                      <th class="header-corner">S/NO</th>
-                      <th class="header-dark-blue">MR Number</th>
-                      <th class="header-dark-blue">Gender</th>
-                      <th class="header-dark-blue text-center">Age</th>
-                      <th class="header-dark-blue text-center">Type</th>
-                      <th class="header-dark-blue">Date</th>
-                      <th class="header-dark-blue">Time</th>
-                      <th class="header-red">Dr Code</th>
-                      <th class="header-red">Bill Doctor (Cashier)</th>
-                      <th class="header-red">Attend Doctor</th>
-                      <th class="header-dark-blue" style="min-width: 150px">Clinic Name</th>
-                      <th class="header-dark-blue text-center">Code</th>
-                      <th class="header-dark-blue" style="max-width: 220px">Diagnosis</th>
-                      <th class="header-dark-blue text-center pe-3" style="width: 70px">Mismatch</th>
+                      <th class="header-corner col-sno">S/NO</th>
+                      <th class="header-dark-blue col-mr">MR Number</th>
+                      <th class="header-dark-blue col-gender">Gender</th>
+                      <th class="header-dark-blue text-center col-age">Age</th>
+                      <th class="header-dark-blue text-center col-type">Type</th>
+                      <th class="header-dark-blue col-date">Date</th>
+                      <th class="header-dark-blue col-time">Time</th>
+                      <th class="header-red col-drcode">Dr Code</th>
+                      <th class="header-red col-doctor">Bill Doctor (Cashier)</th>
+                      <th class="header-red col-doctor">Attend Doctor</th>
+                      <th class="header-dark-blue col-clinic">Clinic Name</th>
+                      <th class="header-dark-blue text-center col-code">Code</th>
+                      <th class="header-dark-blue col-diag">Diagnosis</th>
+                      <th class="header-dark-blue col-diag-name">Diagnosis Name</th>
+                      <th class="header-dark-blue text-center pe-3 col-mismatch">Mismatch</th>
                     </tr>
                   </thead>
                   <tbody :class="{ 'opacity-25': dashboard.isLoading || dashboard.isDetailedLoading }">
@@ -283,25 +311,48 @@ onMounted(() => {
                           {{ getVisitTypeLabel(item.visit_type) }}
                         </span>
                       </td>
-                      <td class="text-nowrap fw-semibold">{{ formatDate(item.visit_date) }}</td>
-                      <td class="text-muted">{{ item.cons_time }}</td>
-                      <td><code>{{ item.doct_code }}</code></td>
-                      <td class="fw-bold small">{{ item.bill_doct_name || 'Name is empty' }}</td>
-                      <td class="fw-bold small">{{ item.cons_doctor_name || 'Name is empty' }}</td>
-                      <td class="fw-bold clinic-name">{{ item.clinic_name }}</td>
-                      <td class="text-center">
+                      <td class="text-nowrap fw-semibold col-date">{{ formatDate(item.visit_date) }}</td>
+                      <td class="text-muted col-time">{{ item.cons_time }}</td>
+                      <td class="col-drcode"><code>{{ item.doct_code }}</code></td>
+                      <td class="fw-bold small text-truncate col-doctor" :title="item.bill_doct_name">{{ item.bill_doct_name || 'Name is empty' }}</td>
+                      <td class="fw-bold small text-truncate col-doctor" :title="item.cons_doctor_name">{{ item.cons_doctor_name || 'Name is empty' }}</td>
+                      <td class="fw-bold clinic-name text-truncate col-clinic" :title="item.clinic_name">{{ item.clinic_name }}</td>
+                      <td class="text-center col-code">
                         <span class="clinic-code">{{ item.clinic_code }}</span>
                       </td>
                       <td class="diagnosis-cell">
-                        <div v-if="item.final_diag || item.prov_diag" class="diag-stack">
-                          <div v-if="item.final_diag" class="diag-item diag-final">
-                            <span class="diag-label">FINAL</span> {{ item.final_diag }}
+                        <div class="scroll-cell-wrap">
+                          <div v-if="item.final_diag || item.prov_diag" class="d-flex align-items-center gap-2">
+                            <div v-if="item.final_diag" class="diag-item diag-final">
+                              <span class="diag-label">FINAL</span> 
+                              <span class="diag-codes">{{ cleanDiagnosisCodes(item.final_diag) }}</span>
+                            </div>
+                            <div v-if="item.prov_diag" class="diag-item diag-prov">
+                              <span class="diag-label">PROV</span> 
+                              <span class="diag-codes">{{ cleanDiagnosisCodes(item.prov_diag) }}</span>
+                            </div>
                           </div>
-                          <div v-if="item.prov_diag" class="diag-item diag-prov">
-                            <span class="diag-label">PROV</span> {{ item.prov_diag }}
-                          </div>
+                          <div v-else class="text-muted italic small opacity-50">No Diagnosis</div>
                         </div>
-                        <div v-else class="text-muted italic small opacity-50">No Diagnosis</div>
+                      </td>
+                      <td class="diagnosis-name-cell">
+                        <div class="scroll-cell-wrap">
+                          <div v-if="item.final_diag || item.prov_diag" class="d-flex align-items-center gap-2">
+                            <div class="diag-name-text">
+                              {{ getDiagnosisNames(item.final_diag || item.prov_diag, expandedRows.includes(index)) }}
+                            </div>
+                            <CButton 
+                              v-if="item.final_diag || item.prov_diag"
+                              color="link" 
+                              size="sm" 
+                              class="p-0 text-decoration-none expand-btn self-start ms-2" 
+                              @click="toggleRowExpansion(index)"
+                            >
+                              {{ expandedRows.includes(index) ? 'Collapse' : 'Expand' }}
+                            </CButton>
+                          </div>
+                          <div v-else>-</div>
+                        </div>
                       </td>
                       <td class="text-center pe-4">
                         <div class="status-indicator shadow-sm" 
@@ -392,6 +443,7 @@ onMounted(() => {
 .text-gradient {
   background: linear-gradient(135deg, #003082 0%, #0072bc 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -456,19 +508,21 @@ onMounted(() => {
 /* IMAGE INSPIRED TABLE STYLING */
 .premium-table {
   border-collapse: separate;
-  border-spacing: 0 8px; /* Vertical gap between rows like in image */
+  border-spacing: 0 4px; /* Reduced vertical gap */
   margin-top: -8px;
+  font-size: 11.5px; /* Premium dense font size */
 }
 
 /* Header Gradients from Image */
 .premium-table thead th {
-  padding: 1.25rem 1rem;
-  font-size: 11px;
+  padding: 0.75rem 0.5rem;
+  font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   border: none;
   vertical-align: middle;
+  white-space: nowrap;
 }
 
 .header-corner { background: #f8fafc; color: #4a5568; border-radius: 12px 0 0 0; text-align: center; }
@@ -491,12 +545,12 @@ onMounted(() => {
 
 .premium-table tbody td {
   background: #ffffff;
-  padding: 0.65rem 0.5rem;
+  padding: 0.4rem 0.5rem;
   border-top: 1px solid #f1f5f9;
   border-bottom: 1px solid #f1f5f9;
   font-weight: 500;
   color: #4a5568;
-  line-height: 1.3;
+  line-height: 1.2;
 }
 
 .premium-table tbody tr:nth-child(even) td {
@@ -552,25 +606,44 @@ onMounted(() => {
 }
 
 .diagnosis-cell {
-  max-width: 200px;
-  white-space: normal;
+  max-width: 180px;
 }
 
-.diag-stack { 
-  display: flex; 
-  flex-direction: column; 
-  gap: 4px; 
-  align-items: flex-start; /* Ensure tags only fit text width */
+.scroll-cell-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
 }
+
+.scroll-cell-wrap::-webkit-scrollbar {
+  height: 3px;
+}
+
+.scroll-cell-wrap::-webkit-scrollbar-thumb {
+  background: #cbd5e0;
+  border-radius: 10px;
+}
+
+.diag-horizontal-list { 
+  display: flex; 
+  flex-direction: row; /* Force horizontal flow */
+  gap: 8px; 
+  align-items: center;
+}
+
 .diag-item {
-  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
   border-radius: 6px;
-  font-size: 13px; /* Increased for better visibility */
+  font-size: 11.5px;
   border: 1px solid #e2e8f0;
   line-height: 1.2;
-  margin-bottom: 3px;
-  font-weight: 600;
-  white-space: nowrap;
+  font-weight: 700;
+  white-space: nowrap; /* Prevent codes from wrapping */
+  background: white;
 }
 .diag-final { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
 .diag-prov { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
@@ -581,6 +654,52 @@ onMounted(() => {
   border-radius: 3px;
   background: rgba(0,0,0,0.1);
   margin-right: 4px;
+}
+
+.diagnosis-name-cell {
+  max-width: 250px;
+  min-width: 150px;
+}
+
+.diag-name-text {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #1e3a8a;
+  line-height: 1.2;
+  white-space: nowrap; /* Force comma list to stay on one line */
+}
+
+.expand-btn {
+  font-size: 11px;
+  font-weight: 800;
+  color: #0072bc;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.expand-btn:hover {
+  color: #003082;
+  transform: translateY(-1px);
+}
+
+/* Column Width Controls for Zero-Scroll */
+.col-sno { width: 45px; min-width: 45px; }
+.col-mr { width: 100px; min-width: 100px; }
+.col-gender { width: 60px; min-width: 60px; text-align: center; }
+.col-age { width: 50px; min-width: 50px; }
+.col-type { width: 85px; min-width: 85px; }
+.col-date { width: 90px; min-width: 90px; }
+.col-time { width: 70px; min-width: 70px; }
+.col-drcode { width: 80px; min-width: 80px; }
+.col-doctor { max-width: 130px; }
+.col-clinic { max-width: 150px; }
+.col-code { width: 70px; min-width: 70px; }
+.col-diag { max-width: 150px; }
+.col-diag-name { max-width: 220px; }
+.col-mismatch { width: 75px; min-width: 75px; }
+
+.self-start {
+  align-self: flex-start;
 }
 
 /* Status Indicator */

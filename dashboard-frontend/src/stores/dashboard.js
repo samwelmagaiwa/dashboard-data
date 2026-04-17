@@ -38,6 +38,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const referralStats = ref(null) // null = loading, [] = no data, [items] = has data
   const realClinics = ref(null) // null = loading, [] = no data
   const detailedClinics = ref(null) // null = loading, [] = no data
+  const diagnosisMetadata = ref({}) // code => {abbreviation, description}
   const isLoading = ref(false)
   const isTrendsLoading = ref(false)
   const isDetailedLoading = ref(false)
@@ -561,6 +562,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
       // Set the first page immediately so the UI shows data
       detailedClinics.value = firstPageData
+      if (response.data.diagnosis_metadata) {
+        diagnosisMetadata.value = { ...diagnosisMetadata.value, ...response.data.diagnosis_metadata }
+      }
 
       if (backgroundMode) {
         return
@@ -579,6 +583,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
             const pageData = pageResponse.data.data || []
             allData.push(...pageData)
             detailedClinics.value = [...allData]
+            if (pageResponse.data.diagnosis_metadata) { diagnosisMetadata.value = { ...diagnosisMetadata.value, ...pageResponse.data.diagnosis_metadata } }
           } catch (pageError) {
             console.error(`[DashboardStore] Error fetching page ${page}:`, pageError)
           }
@@ -904,6 +909,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     referralStats,
     realClinics,
     detailedClinics,
+    diagnosisMetadata,
     isLoading,
     isTrendsLoading,
     fetchStats,

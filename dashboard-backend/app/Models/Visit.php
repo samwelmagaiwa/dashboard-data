@@ -87,4 +87,20 @@ class Visit extends Model
         $this->attributes['nhi_yn'] = empty($value) ? null : $value;
         $this->attributes['is_nhif'] = ($value === 'Y') ? 'Y' : 'N';
     }
+
+    /**
+     * Get the ICD dictionary entry for the provisional diagnosis.
+     */
+    public function provisionalIcd()
+    {
+        return $this->belongsTo(Icd::class, 'prov_diag', 'code');
+    }
+
+    /**
+     * Get the ICD dictionary entry for the final diagnosis.
+     */
+    public function finalIcd()
+    {
+        return $this->belongsTo(Icd::class, 'final_diag', 'code');
+    }
 }

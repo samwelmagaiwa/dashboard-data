@@ -394,6 +394,26 @@ class DashboardController extends Controller
                 ->orderBy('visit_date', 'desc')
                 ->paginate($perPage, ['*'], 'page', $page);
 
+            // Enrich list with ICD Metadata
+            $allCodes = collect();
+            $delimiters = '/[\$,;]/'; // Split by $, comma, or semicolon
+
+            foreach ($paginated->items() as $visit) {
+                if ($visit->prov_diag) {
+                    $codes = preg_split($delimiters, $visit->prov_diag, -1, PREG_SPLIT_NO_EMPTY);
+                    $allCodes = $allCodes->concat(array_map('trim', $codes));
+                }
+                if ($visit->final_diag) {
+                    $codes = preg_split($delimiters, $visit->final_diag, -1, PREG_SPLIT_NO_EMPTY);
+                    $allCodes = $allCodes->concat(array_map('trim', $codes));
+                }
+            }
+
+            $uniqueCodes = $allCodes->unique()->filter()->values();
+            $icdMetadata = \App\Models\Icd::whereIn('code', $uniqueCodes)
+                ->get(['code', 'description', 'abbreviation'])
+                ->keyBy('code');
+
             return [
                 'status' => 'success',
                 'data' => collect($paginated->items())->toArray(),
@@ -402,7 +422,8 @@ class DashboardController extends Controller
                     'last_page' => $paginated->lastPage(),
                     'per_page' => $paginated->perPage(),
                     'total' => $paginated->total(),
-                ]
+                ],
+                'diagnosis_metadata' => $icdMetadata
             ];
         });
     }
