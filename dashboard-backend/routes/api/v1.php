@@ -31,6 +31,7 @@ Route::prefix('dashboard')->controller(DashboardController::class)->group(functi
     Route::get('/gender-radar', 'getGenderRadarStats');
     Route::get('/pending-patients', 'getPendingPatients');
     Route::get('/duplicated-data', 'getDuplicateVisits');
+    Route::get('/top-diseases', 'getTopDiseases');
 });
 
 // Reports Routes

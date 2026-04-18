@@ -1163,4 +1163,69 @@ class DashboardController extends Controller
           ->header('Pragma', 'no-cache')
           ->header('Expires', '0');
     }
+
+    /**
+     * Get the top 10 diseases with a clinic breakdown for a given date range.
+     * Used for the Admin Dashboard stacked horizontal bar chart.
+     */
+    public function getTopDiseases(Request $request)
+    {
+        $startDate = $request->query('start_date', date('Y-m-d'));
+        $endDate = $request->query('end_date', date('Y-m-d'));
+        $clinicName = $request->query('clinic_name');
+
+        $cacheKey = $this->cacheKey('top_diseases', $startDate, $endDate, $clinicName ?? 'all');
+        $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
+        $ttl = $isToday ? 60 : 600;
+
+        return $this->rememberUnlessFresh($request, $cacheKey, $ttl, function() use ($startDate, $endDate, $clinicName) {
+            // Extraction logic: get everything before the first separator ($, ;, ,)
+            // SQL regex or nested SUBSTRING_INDEX
+            $diagExpr = "TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(COALESCE(NULLIF(TRIM(final_diag), ''), TRIM(prov_diag)), '$', 1), ';', 1), ',', 1))";
+
+            $query = Visit::where('visit_date', '>=', $startDate)
+                ->where('visit_date', '<=', $endDate)
+                ->whereNotNull(DB::raw("COALESCE(NULLIF(TRIM(final_diag), ''), TRIM(prov_diag))"))
+                ->where(DB::raw("COALESCE(NULLIF(TRIM(final_diag), ''), TRIM(prov_diag))"), '!=', '');
+
+            if ($clinicName && $clinicName !== 'All Clinics') {
+                $query->where('clinic_name', $clinicName);
+            }
+
+            $rawResults = $query->select(
+                    DB::raw("$diagExpr as diagnosis_code"),
+                    'clinic_name',
+                    DB::raw('COUNT(*) as count')
+                )
+                ->groupBy('diagnosis_code', 'clinic_name')
+                ->get();
+
+            if ($rawResults->isEmpty()) {
+                return [];
+            }
+
+            // Aggregate totals per disease to find the Top 10
+            $diseaseTotals = $rawResults->groupBy('diagnosis_code')->map(fn($group) => $group->sum('count'))->sortDesc()->take(10);
+            $topCodes = $diseaseTotals->keys();
+
+            // Fetch ICD metadata for the top codes
+            $metadata = \App\Models\Icd::whereIn('code', $topCodes)->get()->keyBy('code');
+
+            // Format for stacked chart: each disease is a bar, stacks are clinics
+            $data = $topCodes->map(function($code) use ($rawResults, $metadata, $diseaseTotals) {
+                $meta = $metadata->get($code);
+                $clinicBreakdown = $rawResults->where('diagnosis_code', $code)->pluck('count', 'clinic_name');
+                
+                return [
+                    'code' => $code,
+                    'name' => $meta ? ($meta->abbreviation ?: $meta->description) : $code,
+                    'full_description' => $meta ? $meta->description : $code,
+                    'total' => (int)$diseaseTotals->get($code),
+                    'clinics' => $clinicBreakdown->map(fn($v) => (int)$v)
+                ];
+            });
+
+            return array_values($data->toArray());
+        });
+    }
 }

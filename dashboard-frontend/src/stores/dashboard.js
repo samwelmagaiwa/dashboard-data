@@ -38,6 +38,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const referralStats = ref(null) // null = loading, [] = no data, [items] = has data
   const realClinics = ref(null) // null = loading, [] = no data
   const detailedClinics = ref(null) // null = loading, [] = no data
+  const topDiseases = ref(null) // null = loading, [] = no data
+  const selectedClinic = ref('All Clinics')
   const diagnosisMetadata = ref({}) // code => {abbreviation, description}
   const isLoading = ref(false)
   const isTrendsLoading = ref(false)
@@ -343,6 +345,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
         }
         compStats.value = data.comparison
         referralStats.value = data.referrals
+        fetchTopDiseases(silent)
 
         if (data.trends && Array.isArray(data.trends.labels)) {
           serviceTrendData.value = data.trends
@@ -544,6 +547,25 @@ export const useDashboardStore = defineStore('dashboard', () => {
       return response.data.data || []
     } catch (error) {
       return []
+    }
+  }
+
+  const fetchTopDiseases = async (silent = false) => {
+    if (!silent) topDiseases.value = null
+    try {
+      const { start_date, end_date } = calculateDateRange()
+      const { data } = await api.get('/dashboard/top-diseases', {
+        params: {
+          start_date,
+          end_date,
+          clinic_name: selectedClinic.value !== 'All Clinics' ? selectedClinic.value : undefined,
+          _t: Date.now(),
+        },
+      })
+      topDiseases.value = data
+    } catch (error) {
+      console.error('[DashboardStore] Error fetching top diseases:', error)
+      topDiseases.value = []
     }
   }
 
@@ -909,10 +931,13 @@ export const useDashboardStore = defineStore('dashboard', () => {
     referralStats,
     realClinics,
     detailedClinics,
+    topDiseases,
+    selectedClinic,
     diagnosisMetadata,
     isLoading,
     isTrendsLoading,
     fetchStats,
+    fetchTopDiseases,
     syncCurrentRange,
     isSyncing,
     syncProgress,

@@ -167,6 +167,30 @@ const getDiagnosisNames = (codeString, isExpanded) => {
   return names.join(', ')
 }
 
+// Returns structured array for color-coded diagnosis name rendering
+const getDiagnosisNameItems = (item, isExpanded) => {
+  const items = []
+  // Priority rule: If FINAL diagnosis exists, use it. Otherwise, use PROVISIONAL.
+  if (item.final_diag && item.final_diag.trim() !== '') {
+    const codes = item.final_diag.split(/[\$,;]/).map(c => c.trim()).filter(Boolean)
+    const names = codes.map((code) => {
+      const meta = dashboard.diagnosisMetadata[code]
+      if (!meta) return code
+      return isExpanded ? meta.description : meta.abbreviation || code
+    })
+    items.push({ type: 'final', label: 'FINAL', text: names.join(', ') })
+  } else if (item.prov_diag && item.prov_diag.trim() !== '') {
+    const codes = item.prov_diag.split(/[\$,;]/).map(c => c.trim()).filter(Boolean)
+    const names = codes.map((code) => {
+      const meta = dashboard.diagnosisMetadata[code]
+      if (!meta) return code
+      return isExpanded ? meta.description : meta.abbreviation || code
+    })
+    items.push({ type: 'prov', label: 'PROV', text: names.join(', ') })
+  }
+  return items
+}
+
 onMounted(() => {
   if (!dashboard.isInitialized) {
     refreshData()
@@ -323,12 +347,12 @@ onMounted(() => {
                       <td class="diagnosis-cell">
                         <div class="scroll-cell-wrap">
                           <div v-if="item.final_diag || item.prov_diag" class="d-flex align-items-center gap-2">
-                            <div v-if="item.final_diag" class="diag-item diag-final">
-                              <span class="diag-label">FINAL</span> 
+                            <div v-if="item.final_diag && item.final_diag.trim() !== ''" class="diag-item diag-final">
+                              <span class="diag-label">FINAL</span>
                               <span class="diag-codes">{{ cleanDiagnosisCodes(item.final_diag) }}</span>
                             </div>
-                            <div v-if="item.prov_diag" class="diag-item diag-prov">
-                              <span class="diag-label">PROV</span> 
+                            <div v-else-if="item.prov_diag && item.prov_diag.trim() !== ''" class="diag-item diag-prov">
+                              <span class="diag-label">PROV</span>
                               <span class="diag-codes">{{ cleanDiagnosisCodes(item.prov_diag) }}</span>
                             </div>
                           </div>
@@ -338,8 +362,16 @@ onMounted(() => {
                       <td class="diagnosis-name-cell">
                         <div class="scroll-cell-wrap">
                           <div v-if="item.final_diag || item.prov_diag" class="d-flex align-items-center gap-2">
-                            <div class="diag-name-text">
-                              {{ getDiagnosisNames(item.final_diag || item.prov_diag, expandedRows.includes(index)) }}
+                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                              <div 
+                                v-for="(diagItem, dIdx) in getDiagnosisNameItems(item, expandedRows.includes(index))" 
+                                :key="dIdx" 
+                                class="diag-name-item" 
+                                :class="diagItem.type === 'final' ? 'diag-name-final' : 'diag-name-prov'"
+                              >
+                                <span class="diag-name-label">{{ diagItem.label }}</span>
+                                <span class="diag-name-value">{{ diagItem.text }}</span>
+                              </div>
                             </div>
                             <CButton 
                               v-if="item.final_diag || item.prov_diag"
@@ -438,6 +470,8 @@ onMounted(() => {
   margin: -1.5rem;
   padding: 1.5rem 2rem;
   font-family: 'Outfit', sans-serif;
+  max-width: 100vw;
+  overflow-x: auto;
 }
 
 .text-gradient {
@@ -450,6 +484,7 @@ onMounted(() => {
 .premium-wrapper {
   border-radius: 20px !important;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08) !important;
+  min-width: 1400px;
 }
 
 .title-accent {
@@ -657,8 +692,8 @@ onMounted(() => {
 }
 
 .diagnosis-name-cell {
-  max-width: 250px;
-  min-width: 150px;
+  max-width: 350px;
+  min-width: 200px;
 }
 
 .diag-name-text {
@@ -666,7 +701,47 @@ onMounted(() => {
   font-weight: 700;
   color: #1e3a8a;
   line-height: 1.2;
-  white-space: nowrap; /* Force comma list to stay on one line */
+  white-space: nowrap;
+}
+
+/* Color-coded Diagnosis Name items matching Diagnosis column */
+.diag-name-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  border: 1px solid #e2e8f0;
+  line-height: 1.2;
+  font-weight: 700;
+  white-space: nowrap;
+  background: white;
+}
+
+.diag-name-final {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+
+.diag-name-prov {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.diag-name-label {
+  font-size: 8px;
+  font-weight: 900;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0,0,0,0.1);
+  margin-right: 4px;
+}
+
+.diag-name-value {
+  font-weight: 700;
 }
 
 .expand-btn {
@@ -694,8 +769,8 @@ onMounted(() => {
 .col-doctor { max-width: 130px; }
 .col-clinic { max-width: 150px; }
 .col-code { width: 70px; min-width: 70px; }
-.col-diag { max-width: 150px; }
-.col-diag-name { max-width: 220px; }
+.col-diag { max-width: 200px; min-width: 150px; }
+.col-diag-name { max-width: 350px; min-width: 200px; }
 .col-mismatch { width: 75px; min-width: 75px; }
 
 .self-start {
