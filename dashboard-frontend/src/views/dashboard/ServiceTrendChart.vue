@@ -44,15 +44,6 @@ const scrollToToday = () => {
   tryScroll(1)
 }
 
-// Watch for data changes and scroll to today
-watch([() => normalizedTrendData.value, () => dashboard.selectedPeriod], () => {
-  scrollToToday()
-}, { deep: true })
-
-onMounted(() => {
-  scrollToToday()
-})
-
 const normalizeTrendLabel = (label) => String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 
 const getAnchorDate = () => {
@@ -220,6 +211,15 @@ const normalizedTrendData = computed(() => {
 
 // Breakdown toggle state
 const breakdownEnabled = ref(false)
+
+// Watch for data changes and scroll to today
+watch([() => normalizedTrendData.value, () => dashboard.selectedPeriod, () => breakdownEnabled.value], () => {
+  scrollToToday()
+}, { deep: true })
+
+onMounted(() => {
+  scrollToToday()
+})
 
 // Watch for toggle changes to refetch data
 watch(breakdownEnabled, (newVal) => {

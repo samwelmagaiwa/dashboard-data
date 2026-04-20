@@ -1,5 +1,5 @@
 <script setup>
-import { defineAsyncComponent, computed, onMounted } from 'vue'
+import { defineAsyncComponent, computed, onMounted, ref } from 'vue'
 import { useDashboardStore } from '@/stores/dashboard'
 import { useRouter } from 'vue-router'
 import LoadingBanner from '@/components/LoadingBanner.vue'
@@ -16,6 +16,25 @@ import {
 
 const dashboard = useDashboardStore()
 const router = useRouter()
+const hiddenDiseaseDepartments = ref([])
+
+const diseaseDepartmentColors = {
+  'MLG-INTERNAL MEDICINE DEPARTMENT': '#3b82f6',
+  'MLG-REHABILITATION MEDICINE DEPARTMENT': '#10b981',
+  'MLG-ORTHOPAEDIC & TRAUMA DEPARTMENT': '#eab308',
+  'MLG-OUTPATIENT DEPARTMENT': '#ef4444',
+  'MLG - ORAL HEALTH DEPARTMENT': '#8b5cf6',
+  'MLG-SURGERY DEPARTMENT': '#ec4899',
+  'MLG-PSYCHIATRY & MENTAL HEALTH DEPARTMENT': '#06b6d4',
+  'MLG-EMERGENCY MEDICINE DEPARTMENT': '#f97316',
+  'MLG-PAEDIATRIC & CHILD HEALTH DEPARTMENT': '#6366f1',
+  'MLG-ANESTHOLOGY & INTENSIVE CARE DEPARTMENT': '#14b8a6',
+  'Other Departments': '#64748b',
+}
+
+const fallbackDiseaseDepartmentColors = [
+  '#84cc16', '#f43f5e', '#a855f7', '#22c55e', '#0ea5e9', '#f59e0b', '#d946ef', '#94a3b8',
+]
 
 onMounted(() => {
   // Check if user is authenticated and has admin role
@@ -45,7 +64,7 @@ const topDiseasesChartData = computed(() => {
 
   // Use the top 10 diseases
   const sortedDiseases = [...dashboard.topDiseases].sort((a, b) => b.total - a.total).slice(0, 10)
-  const labels = sortedDiseases.map((d) => `${d.name} (${d.total.toLocaleString()})`)
+  const labels = sortedDiseases.map((d) => d.name)
 
   // Identify all unique departments and their total volume in these top 10 diseases
   const deptTotals = {}
@@ -65,14 +84,12 @@ const topDiseasesChartData = computed(() => {
   const finalDeptNames = [...topDeptNames]
   if (hasOthers) finalDeptNames.push('Other Departments')
 
-  // Premium Medical Palette - More professional and harmonious
-  const colors = [
-    '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
-    '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
-    '#84cc16', '#facc15', '#a855f7', '#d946ef', '#64748b'
-  ]
-
   const datasets = finalDeptNames.map((deptName, index) => {
+    const hidden = hiddenDiseaseDepartments.value.includes(deptName)
+    const color =
+      diseaseDepartmentColors[deptName] ||
+      fallbackDiseaseDepartmentColors[index % fallbackDiseaseDepartmentColors.length]
+
     return {
       label: deptName,
       data: sortedDiseases.map((d) => {
@@ -83,8 +100,9 @@ const topDiseasesChartData = computed(() => {
         }
         return (d.departments || {})[deptName] || 0
       }),
-      backgroundColor: colors[index % colors.length],
-      hoverBackgroundColor: colors[index % colors.length],
+      backgroundColor: color,
+      hoverBackgroundColor: color,
+      hidden,
       barThickness: labels.length > 5 ? 24 : 32,
       borderRadius: 4, // Slight rounding for premium feel
     }
@@ -100,43 +118,120 @@ const top3Diseases = computed(() => {
     .slice(0, 3)
 })
 
+const toggleDiseaseDepartment = (label) => {
+  if (hiddenDiseaseDepartments.value.includes(label)) {
+    hiddenDiseaseDepartments.value = hiddenDiseaseDepartments.value.filter((item) => item !== label)
+    return
+  }
+
+  hiddenDiseaseDepartments.value = [...hiddenDiseaseDepartments.value, label]
+}
+
+const topDiseasesLabelPlugin = {
+  id: 'topDiseasesLabelPlugin',
+  afterDatasetsDraw(chart) {
+    const { ctx, data } = chart
+    const xScale = chart.scales.x
+
+    if (!xScale || !data?.datasets?.length) return
+
+    ctx.save()
+
+    data.labels.forEach((_, index) => {
+      let total = 0
+      let lastVisibleElement = null
+
+      data.datasets.forEach((dataset, datasetIndex) => {
+        const value = Number(dataset.data[index] || 0)
+        if (!value) return
+
+        total += value
+
+        const element = chart.getDatasetMeta(datasetIndex)?.data?.[index]
+        if (!element) return
+        lastVisibleElement = element
+
+        const props = element.getProps(['x', 'base', 'y', 'height'], true)
+        const width = Math.abs(props.x - props.base)
+
+        if (width < 16) return
+
+        const centerX = props.base + (props.x - props.base) / 2
+        const centerY = props.y
+
+        ctx.font = '700 10px Outfit, sans-serif'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillStyle = '#ffffff'
+        ctx.strokeStyle = 'rgba(15, 23, 42, 0.35)'
+        ctx.lineWidth = 2
+
+        const text = value.toLocaleString()
+        ctx.strokeText(text, centerX, centerY)
+        ctx.fillText(text, centerX, centerY)
+      })
+
+      if (!lastVisibleElement || !total) return
+
+      const endProps = lastVisibleElement.getProps(['x', 'y'], true)
+      const totalText = total.toLocaleString()
+
+      ctx.font = '900 12px Outfit, sans-serif'
+      const textWidth = ctx.measureText(totalText).width
+      const pillHeight = 24
+      const pillWidth = textWidth + 16
+      const x = Math.min(endProps.x + 10, xScale.right - pillWidth)
+      const y = endProps.y - pillHeight / 2
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.96)'
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.roundRect(x, y, pillWidth, pillHeight, 999)
+      ctx.fill()
+      ctx.stroke()
+
+      ctx.fillStyle = '#0f172a'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(totalText, x + pillWidth / 2, endProps.y)
+    })
+
+    ctx.restore()
+  },
+}
+
 const topDiseasesChartOptions = computed(() => ({
   indexAxis: 'y',
   maintainAspectRatio: false,
+  interaction: {
+    mode: 'index',
+    intersect: false,
+  },
   plugins: {
     legend: {
-      position: 'bottom',
-      labels: {
-        usePointStyle: true,
-        padding: 15,
-        font: { size: 10, weight: '600' },
-        boxWidth: 6,
-      },
+      display: false, // Switch to custom HTML legend for better placement
     },
     tooltip: {
       padding: 16,
-      backgroundColor: 'rgba(15, 23, 42, 0.98)', // Ultra dark premium theme
+      backgroundColor: 'rgba(15, 23, 42, 0.96)',
       titleFont: { size: 14, weight: 'bold' },
       bodyFont: { size: 13 },
-      cornerRadius: 10,
-      borderColor: 'rgba(255,255,255,0.15)',
+      cornerRadius: 12,
+      borderColor: 'rgba(255,255,255,0.1)',
       borderWidth: 1,
       displayColors: true,
-      boxPadding: 6,
-      filter: (tooltipItem) => tooltipItem.raw > 0, // CRITICAL: Hide empty segments
+      boxPadding: 8,
+      filter: (tooltipItem) => tooltipItem.raw > 0,
       callbacks: {
         title: (tooltipItems) => {
-          const combinedLabel = tooltipItems[0].label
-          const disease = dashboard.topDiseases.find((d) => 
-            combinedLabel.startsWith(d.name) && combinedLabel.includes(d.total.toLocaleString())
-          )
-          return `${disease?.full_description || combinedLabel}`
+          const diseaseName = tooltipItems[0].label
+          const disease = dashboard.topDiseases.find((d) => d.name === diseaseName)
+          return `${disease?.full_description || diseaseName}`
         },
         afterTitle: (tooltipItems) => {
-          const combinedLabel = tooltipItems[0].label
-          const disease = dashboard.topDiseases.find((d) => 
-            combinedLabel.startsWith(d.name) && combinedLabel.includes(d.total.toLocaleString())
-          )
+          const diseaseName = tooltipItems[0].label
+          const disease = dashboard.topDiseases.find((d) => d.name === diseaseName)
           return `Total Cases: ${disease?.total || 0}`
         },
         label: (context) => {
@@ -149,9 +244,11 @@ const topDiseasesChartOptions = computed(() => ({
   scales: {
     x: {
       stacked: true,
-      grid: { display: true, drawBorder: false, color: 'rgba(0,0,0,0.03)' },
+      grace: '12%',
+      grid: { display: true, drawBorder: false, color: 'rgba(148, 163, 184, 0.16)' },
       ticks: { 
-        font: { size: 10 },
+        font: { size: 10, weight: '500' },
+        color: '#64748b',
         callback: (value) => value >= 1000 ? (value/1000) + 'k' : value
       },
     },
@@ -159,9 +256,18 @@ const topDiseasesChartOptions = computed(() => ({
       stacked: true,
       grid: { display: false },
       ticks: { 
-        font: { size: 11, weight: '700' },
-        color: '#475569',
-        padding: 10,
+        font: { size: 12, weight: 'bold' },
+        color: '#334155',
+        padding: 15,
+        callback: (value, index) => {
+          const label = topDiseasesChartData.value.labels[index] || ''
+          const disease = [...(dashboard.topDiseases || [])]
+            .sort((a, b) => b.total - a.total)
+            .slice(0, 10)
+            .find((item) => item.name === label)
+
+          return disease ? `${label} (${disease.total.toLocaleString()})` : label
+        },
       },
     },
   },
@@ -204,7 +310,7 @@ const getPercentage = (valueTitle, totalTitle) => {
 </script>
 
 <template>
-  <div class="admin-dashboard p-3" style="position: relative; min-height: 400px">
+  <div class="admin-dashboard px-1 px-lg-2 py-3" style="position: relative; min-height: 400px">
     <LoadingBanner v-if="dashboard.isLoading" />
 
     <div :style="{ opacity: dashboard.isLoading ? 0.6 : 1, transition: 'opacity 0.3s' }">
@@ -349,70 +455,85 @@ const getPercentage = (valueTitle, totalTitle) => {
         </CCol>
       </CRow>
 
-      <!-- Charts Section -->
-      <CRow>
-        <CCol :md="6" class="mb-4">
-          <CCard class="h-100 border-0 shadow-sm overflow-hidden">
-            <CCardHeader class="bg-white border-0 py-3 d-flex justify-content-between align-items-center">
-              <div>
-                <h5 class="mb-0 fw-bold text-dark">Top 10 Diseases</h5>
-                <span class="text-muted small">Leading causes of visits across departments</span>
+      <!-- Glassmorphic Diseases Snapshot -->
+      <div class="diseases-snapshot-container premium-shadow mb-4 overflow-hidden rounded-4">
+        <div class="p-4">
+          <div class="mb-4 d-flex flex-column gap-3">
+            <h2 class="diseases-title fw-bold mb-0">Top 10 Diseases</h2>
+
+            <div v-if="topDiseasesChartData.datasets.length > 0" class="d-flex flex-wrap gap-3 align-items-center">
+              <button
+                v-for="ds in topDiseasesChartData.datasets"
+                :key="ds.label"
+                type="button"
+                class="legend-toggle-chip d-flex align-items-center gap-2"
+                :class="{ inactive: hiddenDiseaseDepartments.includes(ds.label) }"
+                @click="toggleDiseaseDepartment(ds.label)"
+              >
+                <span class="legend-dot" :style="{ backgroundColor: ds.backgroundColor }"></span>
+                <span class="legend-chip-text fw-bold" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px">
+                  {{ ds.label }}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <CRow v-if="dashboard.topDiseases === null" class="py-5 text-center">
+            <CCol>
+              <div class="spinner-border text-primary mb-3" role="status" style="width: 2.5rem; height: 2.5rem"></div>
+              <p class="text-muted small mb-0">Loading clinical data...</p>
+            </CCol>
+          </CRow>
+
+          <CRow v-else-if="dashboard.topDiseases.length === 0" class="py-5 text-center">
+            <CCol>
+              <CIcon icon="cil-chart" size="xl" class="text-muted opacity-25 mb-2" />
+              <p class="text-muted small">No clinical data found for this period.</p>
+            </CCol>
+          </CRow>
+
+          <CRow v-else class="g-4">
+            <!-- Main Chart Area -->
+            <CCol :lg="9" class="position-relative">
+              <div class="p-3 rounded-4 diseases-chart-card h-100" style="min-height: 420px">
+                <CChart
+                  type="bar"
+                  :data="topDiseasesChartData"
+                  :options="topDiseasesChartOptions"
+                  :plugins="[topDiseasesLabelPlugin]"
+                  style="height: 100%; width: 100%"
+                />
               </div>
-              <div v-if="dashboard.topDiseases?.length > 0" class="badge bg-light text-dark border fw-medium px-3 py-2">
-                {{ dashboard.selectedClinic }}
-              </div>
-            </CCardHeader>
-            <CCardBody class="px-3 pb-3">
-              <div v-if="!dashboard.topDiseases || dashboard.topDiseases.length === 0" class="h-100 d-flex align-items-center justify-content-center flex-column text-muted py-5">
-                <CIcon icon="cil-chart" size="xl" class="mb-2 opacity-50" />
-                <p class="small">No data available for the selected range.</p>
-              </div>
-              <div v-else class="row g-0 h-100">
-                <div class="col-lg-8" style="min-height: 400px">
-                  <CChart
-                    type="bar"
-                    :data="topDiseasesChartData"
-                    :options="topDiseasesChartOptions"
-                    style="height: 100%; width: 100%"
-                  />
-                </div>
-                <div class="col-lg-4 ps-lg-3 border-start d-none d-lg-block">
-                  <div class="p-2">
-                    <h6 class="fw-bold mb-3 small text-uppercase text-muted letter-spacing-1">Top 3 Leading Diseases</h6>
-                    <div v-for="(disease, idx) in top3Diseases" :key="disease.code" class="mb-3 p-3 rounded-3 bg-light border-0 premium-hover-effect">
-                      <div class="d-flex justify-content-between align-items-start mb-1">
-                        <span class="badge bg-dark rounded-circle d-flex align-items-center justify-content-center p-0" style="width: 20px; height: 20px; font-size: 10px">{{ idx + 1 }}</span>
-                        <span class="fw-800 text-primary" style="font-size: 1.1rem">{{ disease.total.toLocaleString() }}</span>
+            </CCol>
+
+            <!-- Top 3 Circular List Area -->
+            <CCol :lg="3">
+              <div class="p-3 rounded-4 diseases-chart-card h-100 d-flex flex-column">
+                <h6 class="diseases-panel-title small fw-bold text-uppercase letter-spacing-1 mb-4">Top 3 Leading Diseases</h6>
+                <div class="flex-grow-1 overflow-auto pe-1">
+                  <div v-for="(disease, idx) in top3Diseases" :key="disease.code" class="mb-3 glass-item premium-shadow-sm">
+                    <div class="d-flex align-items-center gap-3">
+                      <div class="circular-index">{{ idx + 1 }}</div>
+                      <div class="flex-grow-1">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                          <span class="diseases-name fw-bold h5 mb-0">{{ disease.name }}</span>
+                          <span class="diseases-total fw-800 h4 mb-0">{{ disease.total.toLocaleString() }}</span>
+                        </div>
+                        <p class="diseases-desc small mb-0 truncate-2-lines line-height-sm">
+                          {{ cleanDescription(disease.full_description) }}
+                        </p>
                       </div>
-                      <div class="fw-bold text-dark text-truncate mb-1" style="font-size: 0.9rem" :title="disease.full_description">
-                        {{ disease.name }}
-                      </div>
-                      <div class="text-muted truncate-2-lines small" style="line-height: 1.3">
-                        {{ cleanDescription(disease.full_description) }}
-                      </div>
-                    </div>
-                    <div class="mt-4 text-center">
-                      <p class="text-muted small mb-0">Analysis based on current filters</p>
                     </div>
                   </div>
                 </div>
+                <div class="mt-3 pt-3 border-top border-dark border-opacity-10 text-center">
+                  <span class="text-muted small italic">Analysis based on current filters</span>
+                </div>
               </div>
-            </CCardBody>
-          </CCard>
-        </CCol>
-        <CCol :md="6" class="mb-4">
-          <CCard class="h-100 border-0 shadow-sm">
-            <CCardHeader class="bg-white">Admission VS Discharges</CCardHeader>
-            <CCardBody style="height: 350px">
-              <ChartBar
-                :data="dashboard.barChartData"
-                :options="chartOptions"
-                style="height: 100%; width: 100%"
-              />
-            </CCardBody>
-          </CCard>
-        </CCol>
-      </CRow>
+            </CCol>
+          </CRow>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -550,28 +671,101 @@ const getPercentage = (valueTitle, totalTitle) => {
   background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
 }
 
+.diseases-snapshot-container {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+}
+
+.diseases-title {
+  color: #3399ff;
+}
+
+.diseases-chart-card {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border: 1px solid #e2e8f0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+}
+
+.glass-item {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 1.25rem;
+  border: 1px solid #e2e8f0;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.glass-item:hover {
+  background: #f8fbff;
+  transform: translateY(-2px);
+}
+
+.diseases-panel-title {
+  color: #64748b;
+}
+
+.diseases-name {
+  color: #0f172a;
+}
+
+.diseases-total {
+  color: #3399ff;
+}
+
+.diseases-desc {
+  color: #64748b;
+}
+
+.circular-index {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #fff;
+  color: #0d122b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+  box-shadow: 0 8px 18px rgba(51, 153, 255, 0.18);
+}
+
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.18);
+}
+
+.legend-toggle-chip {
+  border: 1px solid #dbeafe;
+  background: #f8fbff;
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  transition: all 0.2s ease;
+}
+
+.legend-toggle-chip:hover {
+  background: #eef6ff;
+  transform: translateY(-1px);
+}
+
+.legend-toggle-chip.inactive {
+  opacity: 0.45;
+  filter: grayscale(0.2);
+}
+
+.legend-chip-text {
+  color: #475569;
+}
+
+.line-height-sm { line-height: 1.2; }
+
+.italic { font-style: italic; }
+
 .premium-hover-effect {
   transition: all 0.2s ease-in-out;
-}
-
-.premium-hover-effect:hover {
-  background-color: #fff !important;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-  transform: translateX(4px);
-}
-
-.truncate-2-lines {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;  
-  overflow: hidden;
-}
-
-.letter-spacing-1 {
-  letter-spacing: 1px;
-}
-
-.fw-800 {
-  font-weight: 800;
 }
 </style>

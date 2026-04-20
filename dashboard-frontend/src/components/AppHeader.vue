@@ -191,15 +191,15 @@ const formatWeek = (date) => {
         <CFormSelect v-model="filterMode" :options="periodOptions" style="width: 120px" size="sm" />
 
         <!-- Navigation Buttons -->
-        <div v-if="filterMode !== 'range'" class="d-flex align-items-center gap-1">
-          <CButton color="light" variant="outline" size="sm" @click="dashboard.jumpDate('prev')">
-            <CIcon icon="cil-chevron-left" />
+        <div v-if="filterMode !== 'range'" class="d-flex align-items-center gap-1 header-nav-actions">
+          <CButton color="light" variant="outline" size="sm" class="date-nav-btn" @click="dashboard.jumpDate('prev')">
+            <CIcon icon="cil-chevron-left" class="date-nav-icon" />
           </CButton>
-          <CButton color="light" variant="outline" size="sm" @click="dashboard.resetToToday">
+          <CButton color="light" variant="outline" size="sm" class="today-btn" @click="dashboard.resetToToday">
             Today
           </CButton>
-          <CButton color="light" variant="outline" size="sm" @click="dashboard.jumpDate('next')">
-            <CIcon icon="cil-chevron-right" />
+          <CButton color="light" variant="outline" size="sm" class="date-nav-btn" @click="dashboard.jumpDate('next')">
+            <CIcon icon="cil-chevron-right" class="date-nav-icon" />
           </CButton>
         </div>
 
@@ -252,7 +252,16 @@ const formatWeek = (date) => {
           <CIcon icon="cil-sync" class="me-1" :class="{ 'fa-spin': dashboard.isLoading }" />
           {{ dashboard.isLoading ? 'Syncing...' : 'Sync' }}
         </CButton>
-        <AutoScrollControl />
+        <CDropdown variant="nav-item" :caret="false">
+          <CDropdownToggle color="secondary" variant="outline" class="d-flex align-items-center" size="sm">
+            <CIcon icon="cil-settings" class="me-2" />
+            Controls
+          </CDropdownToggle>
+          <CDropdownMenu class="p-3 shadow-lg border-0" style="min-width: 350px; border-radius: 16px">
+            <div class="mb-2 fw-bold text-muted small text-uppercase letter-spacing-1">Page Settings</div>
+            <AutoScrollControl />
+          </CDropdownMenu>
+        </CDropdown>
         <CButton color="warning" size="sm" variant="outline" @click="modalVisible = true"
           >Export</CButton
         >
@@ -358,3 +367,41 @@ const formatWeek = (date) => {
     </CContainer> -->
   </CHeader>
 </template>
+
+<style scoped>
+.header-nav-actions .btn,
+.today-btn {
+  min-height: 34px;
+}
+
+.date-nav-btn {
+  min-width: 34px;
+  padding: 0.35rem 0.55rem;
+  border-color: #dbeafe;
+  background: #ffffff;
+}
+
+.date-nav-btn:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.date-nav-icon {
+  color: #2563eb;
+  width: 16px;
+  height: 16px;
+}
+
+.today-btn {
+  border-color: #dbeafe;
+  background: #ffffff;
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.today-btn:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+</style>

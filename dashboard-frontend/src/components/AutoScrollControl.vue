@@ -13,9 +13,6 @@ const handleSpeedChange = (event) => {
 
 <template>
   <div class="auto-scroll-control d-inline-flex align-items-center gap-2">
-    <span class="auto-scroll-caption">
-      Auto Scroll {{ isAutoScrollEnabled ? 'ON' : 'OFF' }}
-    </span>
     <button
       type="button"
       class="auto-scroll-toggle"
@@ -44,14 +41,6 @@ const handleSpeedChange = (event) => {
 <style scoped>
 .auto-scroll-control {
   min-width: max-content;
-}
-
-.auto-scroll-caption {
-  font-size: 0.82rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: #4f46c8;
-  text-transform: uppercase;
 }
 
 .auto-scroll-speed {
