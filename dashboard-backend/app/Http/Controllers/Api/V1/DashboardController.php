@@ -1194,10 +1194,10 @@ class DashboardController extends Controller
 
             $rawResults = $query->select(
                     DB::raw("$diagExpr as diagnosis_code"),
-                    'clinic_name',
+                    'dept_name',
                     DB::raw('COUNT(*) as count')
                 )
-                ->groupBy('diagnosis_code', 'clinic_name')
+                ->groupBy('diagnosis_code', 'dept_name')
                 ->get();
 
             if ($rawResults->isEmpty()) {
@@ -1211,17 +1211,17 @@ class DashboardController extends Controller
             // Fetch ICD metadata for the top codes
             $metadata = \App\Models\Icd::whereIn('code', $topCodes)->get()->keyBy('code');
 
-            // Format for stacked chart: each disease is a bar, stacks are clinics
+            // Format for stacked chart: each disease is a bar, stacks are departments
             $data = $topCodes->map(function($code) use ($rawResults, $metadata, $diseaseTotals) {
                 $meta = $metadata->get($code);
-                $clinicBreakdown = $rawResults->where('diagnosis_code', $code)->pluck('count', 'clinic_name');
+                $deptBreakdown = $rawResults->where('diagnosis_code', $code)->pluck('count', 'dept_name');
                 
                 return [
                     'code' => $code,
                     'name' => $meta ? ($meta->abbreviation ?: $meta->description) : $code,
                     'full_description' => $meta ? $meta->description : $code,
                     'total' => (int)$diseaseTotals->get($code),
-                    'clinics' => $clinicBreakdown->map(fn($v) => (int)$v)
+                    'departments' => $deptBreakdown->map(fn($v) => (int)$v)
                 ];
             });
 
