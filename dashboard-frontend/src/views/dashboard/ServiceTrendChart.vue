@@ -302,44 +302,22 @@ const barLabelsPlugin = {
 
         ctx.save()
         // SPECIAL HANDLING FOR TREND LINE (Index 0)
-        if (datasetIndex === 0) {
-          // Position labels DIRECTLY ABOVE the data points for better connection
-          const labelY = y - 10
+        // Skip labels for the line chart (Trend) to avoid redundancy and misalignment
+        // Total OPD (dataset index 1) will now have its label drawn on top of its bar like other metrics
+        if (datasetIndex === 0) return
 
-          // Draw vertical "dotted" line down TO the point (shorter line)
-          ctx.beginPath()
-          ctx.moveTo(x, y - 5) 
-          ctx.lineTo(x, y - 25)
-          ctx.strokeStyle = '#94a3b8' 
-          ctx.lineWidth = 1.5
-          ctx.setLineDash([2, 4]) 
-          ctx.stroke()
-          ctx.setLineDash([]) 
+        const yPos =
+          value === null || value === undefined || value === 0 ? scales.y.bottom - 8 : y - 5
 
-          // Draw Text (16px)
-          ctx.font = `bold 16px 'Outfit', sans-serif`
-          ctx.fillStyle = color 
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'bottom' 
+        const fontSize = isBreakdownMode ? (numLabels > 8 ? 13 : numLabels > 4 ? 14 : 16) : 18
+        ctx.font = `bold ${fontSize}px 'Outfit', sans-serif`
+        ctx.fillStyle = color
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'bottom'
+        ctx.shadowColor = 'white'
+        ctx.shadowBlur = 5
+        ctx.fillText(displayValue, x, yPos + 2)
 
-          ctx.shadowColor = 'white'
-          ctx.shadowBlur = 4
-          ctx.fillText(displayValue, x, labelY - 20)
-        } else if (datasetIndex === 1) {
-          return
-        } else {
-          const yPos =
-            value === null || value === undefined || value === 0 ? scales.y.bottom - 8 : y - 5
-
-          const fontSize = isBreakdownMode ? (numLabels > 8 ? 13 : numLabels > 4 ? 14 : 16) : 18 // Slightly larger
-          ctx.font = `bold ${fontSize}px 'Outfit', sans-serif`
-          ctx.fillStyle = color
-          ctx.textAlign = 'center'
-          ctx.textBaseline = 'bottom'
-          ctx.shadowColor = 'white'
-          ctx.shadowBlur = 5
-          ctx.fillText(displayValue, x, yPos + 2)
-        }
         ctx.restore()
       })
     })

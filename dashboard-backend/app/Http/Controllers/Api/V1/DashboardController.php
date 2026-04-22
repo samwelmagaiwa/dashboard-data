@@ -1032,8 +1032,9 @@ class DashboardController extends Controller
         $cacheKey = $this->cacheKey('duplicate_visits', $startDate, $endDate);
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 600 : 3600;
+        $fresh = filter_var($request->query('fresh', false), FILTER_VALIDATE_BOOLEAN);
 
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
+        $resolver = function() use ($startDate, $endDate) {
             $duplicates = \App\Models\DuplicateVisit::select([
                     'mr_number',
                     'visit_num',
@@ -1046,7 +1047,7 @@ class DashboardController extends Controller
                     'dept_name',
                     'cons_doctor',
                     'pat_catg_nm',
-                    \Illuminate\Support\Facades\DB::raw('COUNT(*) as occurrence_count'),
+                    \Illuminate\Support\Facades\DB::raw('MAX(occurrence_count) as occurrence_count'),
                     \Illuminate\Support\Facades\DB::raw('MAX(synchronized_at) as latest_sync_at')
                 ])
                 ->where('visit_date', '>=', $startDate)
@@ -1073,7 +1074,14 @@ class DashboardController extends Controller
                 'status' => 'success',
                 'data' => $duplicates
             ]);
-        });
+        };
+
+        if ($fresh) {
+            Cache::forget($cacheKey);
+            return $resolver();
+        }
+
+        return Cache::remember($cacheKey, $ttl, $resolver);
     }
 
     /**

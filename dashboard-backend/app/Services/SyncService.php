@@ -52,12 +52,14 @@ class SyncService
             "pie_stats_{$date}_{$date}_v{$v}",
             "comp_stats_{$date}_{$date}_v{$v}",
             "referral_stats_{$date}_{$date}_v{$v}",
+            "duplicate_visits_{$date}_{$date}_v{$v}",
             // Today's caches (always clear if syncing today)
             "dashboard_stats_{$today}_{$today}_v{$v}",
             "clinic_breakdown_{$today}_{$today}_v{$v}",
             "pie_stats_{$today}_{$today}_v{$v}",
             "comp_stats_{$today}_{$today}_v{$v}",
             "referral_stats_{$today}_{$today}_v{$v}",
+            "duplicate_visits_{$today}_{$today}_v{$v}",
             // Snapshot caches (multiple defaults)
             "dashboard_snapshot_{$date}_{$date}_day_none_v{$v}",
             "dashboard_snapshot_{$date}_{$date}_range_none_v{$v}",
@@ -68,6 +70,8 @@ class SyncService
             "dashboard_snapshot_{$yearStart}_{$yearEnd}_year_none_v{$v}",
             "dashboard_snapshot_{$monthStart}_{$monthEnd}_month_monthly_v{$v}",
             "dashboard_snapshot_{$yearStart}_{$yearEnd}_year_monthly_v{$v}",
+            "duplicate_visits_{$monthStart}_{$monthEnd}_v{$v}",
+            "duplicate_visits_{$yearStart}_{$yearEnd}_v{$v}",
         ];
 
         // Clear detailed_clinics cache - need to clear ALL page/per_page combinations
@@ -609,18 +613,21 @@ class SyncService
             $uniqueKey = "{$visitRecord['mr_number']}_{$visitRecord['visit_num']}_{$visitRecord['visit_date']}_{$visitRecord['clinic_code']}_{$visitRecord['dept_code']}_{$visitRecord['cons_no']}";
             
             if (isset($seenInBatch[$uniqueKey])) {
-                // This is a duplicate within the current API batch
-                $duplicateRecords[] = $visitRecord;
+                $seenInBatch[$uniqueKey]['occurrence_count']++;
+                $duplicateRecords[$uniqueKey] = $seenInBatch[$uniqueKey];
                 continue;
             }
 
-            $seenInBatch[$uniqueKey] = true;
+            $seenInBatch[$uniqueKey] = [
+                ...$visitRecord,
+                'occurrence_count' => 1,
+            ];
             $preparedVisits[] = $visitRecord;
         }
 
         // Store duplicates in the dedicated table
         if (!empty($duplicateRecords)) {
-            $duplicateBatch = collect($duplicateRecords)->map(function($record) use ($now) {
+            $duplicateBatch = collect(array_values($duplicateRecords))->map(function($record) use ($now) {
                 return [
                     'mr_number' => $record['mr_number'],
                     'visit_num' => $record['visit_num'],
@@ -633,6 +640,7 @@ class SyncService
                     'dept_name' => $record['dept_name'],
                     'cons_doctor' => $record['cons_doctor'],
                     'pat_catg_nm' => $record['pat_catg_nm'],
+                    'occurrence_count' => $record['occurrence_count'],
                     'synchronized_at' => $now,
                     'created_at' => $now,
                     'updated_at' => $now,
@@ -643,11 +651,11 @@ class SyncService
                 \App\Models\DuplicateVisit::upsert(
                     $chunk,
                     ['mr_number', 'visit_num', 'visit_date', 'clinic_code', 'dept_code', 'cons_no'],
-                    ['clinic_name', 'cons_time', 'dept_name', 'cons_doctor', 'pat_catg_nm', 'synchronized_at', 'updated_at']
+                    ['clinic_name', 'cons_time', 'dept_name', 'cons_doctor', 'pat_catg_nm', 'occurrence_count', 'synchronized_at', 'updated_at']
                 );
             }
             
-            Log::info("[SyncService] Captured/Updated " . count($duplicateRecords) . " duplicate records.");
+            Log::info("[SyncService] Captured/Updated " . count($duplicateRecords) . " duplicate consultations.");
         }
 
         // Master upserts removed from here - now handled explicitly in syncForDate()
@@ -770,5 +778,10 @@ class SyncService
                 Log::warning("[SyncService] Master data upsert failed for $type: " . $e->getMessage());
             }
         }
+    }
+
+    public function refreshDuplicateOccurrences(string $date): array
+    {
+        return $this->syncForDate($date);
     }
 }

@@ -24,6 +24,7 @@ return new class extends Migration
             $table->string('dept_name')->nullable();
             $table->string('cons_doctor')->nullable();
             $table->string('pat_catg_nm')->nullable();
+            $table->unsignedInteger('occurrence_count')->default(1);
             $table->timestamp('synchronized_at')->useCurrent();
             $table->timestamps();
         });

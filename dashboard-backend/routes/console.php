@@ -10,3 +10,10 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('sync:auto-daily')->everyTenMinutes();
+
+Artisan::command('dashboard:refresh-duplicate-occurrences {date}', function () {
+    $date = $this->argument('date');
+    $service = app(\App\Services\SyncService::class);
+    $service->refreshDuplicateOccurrences($date);
+    $this->info("Refreshed duplicate occurrences for {$date}");
+})->purpose('Refresh duplicate occurrence counts for a specific date');
