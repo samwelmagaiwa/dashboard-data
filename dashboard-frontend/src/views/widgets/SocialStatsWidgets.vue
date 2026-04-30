@@ -157,15 +157,15 @@ watch(
       <!-- Total Consulted -->
       <CCol class="metric-col">
         <div
-          class="stat-card premium-shadow shadow-orange"
-          style="border-left: 4px solid #f97316; border-top: 1px solid #f97316"
+          class="stat-card premium-shadow shadow-green"
+          style="border-left: 4px solid #008000; border-top: 1px solid #008000"
         >
           <div class="stat-card-header mb-1">
-            <div class="stat-icon-wrapper" style="background-color: rgba(249, 115, 22, 0.15)">
-              <CIcon :icon="cilFile" class="stat-icon" style="color: #f97316" />
+            <div class="stat-icon-wrapper" style="background-color: rgba(0, 128, 0, 0.15)">
+              <CIcon :icon="cilFile" class="stat-icon" style="color: #008000" />
             </div>
             <div class="stat-main-info">
-              <h3 class="stat-value" style="color: #f97316">
+              <h3 class="stat-value" style="color: #008000">
                 {{ getValue('consulted') }}
               </h3>
               <span class="stat-label">Consulted</span>
@@ -454,13 +454,13 @@ watch(
   box-shadow: 0 12px 30px -5px rgba(220, 53, 69, 0.6) !important;
 }
 
-.shadow-orange {
+.shadow-green {
   box-shadow:
-    0 6px 20px -4px rgba(249, 115, 22, 0.4),
-    0 4px 12px -2px rgba(249, 115, 22, 0.2) !important;
+    0 6px 20px -4px rgba(0, 128, 0, 0.4),
+    0 4px 12px -2px rgba(0, 128, 0, 0.2) !important;
 }
-.shadow-orange:hover {
-  box-shadow: 0 12px 30px -5px rgba(249, 115, 22, 0.6) !important;
+.shadow-green:hover {
+  box-shadow: 0 12px 30px -5px rgba(0, 128, 0, 0.6) !important;
 }
 
 .shadow-amber {

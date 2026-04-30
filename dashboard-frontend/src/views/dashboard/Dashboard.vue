@@ -32,8 +32,29 @@ const dashboard = useDashboardStore()
 const autoScroll = getAutoScrollState()
 const isAutoScrollEnabled = computed(() => autoScroll.isEnabled.value)
 const hiddenPieCategories = ref([]) // Track hidden categories for pie chart
+const showOutageSlideshow = computed(() => dashboard.remoteApiAvailable === false)
+const outageSlides = ['/outage-slides/slide-1.jpg', '/outage-slides/slide-2.jpg', '/outage-slides/slide-3.jpg']
+const activeOutageSlide = ref(0)
 
 let syncInterval = null
+let outageSlideInterval = null
+
+const startOutageSlideshow = () => {
+  if (outageSlideInterval) return
+
+  outageSlideInterval = setInterval(() => {
+    activeOutageSlide.value = (activeOutageSlide.value + 1) % outageSlides.length
+  }, 5000)
+}
+
+const stopOutageSlideshow = () => {
+  if (outageSlideInterval) {
+    clearInterval(outageSlideInterval)
+    outageSlideInterval = null
+  }
+
+  activeOutageSlide.value = 0
+}
 
 onMounted(() => {
   dashboard.fetchStats()
@@ -46,9 +67,23 @@ onMounted(() => {
   }, 300000) // 5 minutes
 })
 
+watch(
+  showOutageSlideshow,
+  (isActive) => {
+    if (isActive) {
+      startOutageSlideshow()
+      return
+    }
+
+    stopOutageSlideshow()
+  },
+  { immediate: true },
+)
+
 onUnmounted(() => {
   dashboard.stopPulse() // Cleanup polling
   if (syncInterval) clearInterval(syncInterval)
+  stopOutageSlideshow()
 })
 
 const getCategoryColor = (title) => {
@@ -418,38 +453,50 @@ const formatDate = (dateStr) => {
     class="dashboard-grid px-0 pt-0 pb-3"
     style="position: relative; min-height: 400px; overflow-x: hidden"
   >
-    <LoadingBanner v-if="dashboard.isLoading" />
-
-    <!-- Future Date Warning Alert -->
-    <div
-      v-if="dashboard.futureDateWarning"
-      class="alert alert-warning alert-dismissible fade show mb-4 shadow-sm"
-      role="alert"
-    >
-      <div class="d-flex align-items-center">
-        <div class="me-3">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="32"
-            height="32"
-            fill="currentColor"
-            class="text-warning"
-            viewBox="0 0 16 16"
-          >
-            <path
-              d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"
-            />
-          </svg>
-        </div>
-        <div>
-          <h5 class="alert-heading mb-1 fw-bold">{{ dashboard.futureDateWarning.title }}</h5>
-          <p class="mb-0">{{ dashboard.futureDateWarning.message }}</p>
+    <div v-if="showOutageSlideshow" class="outage-slideshow-shell">
+      <div
+        class="outage-slideshow-track"
+        :style="{ transform: `translateX(-${activeOutageSlide * 100}%)` }"
+      >
+        <div v-for="slide in outageSlides" :key="slide" class="outage-slide">
+          <img :src="slide" alt="Hospital view" class="outage-slide-image" />
         </div>
       </div>
     </div>
 
-    <div :style="{ opacity: dashboard.isLoading ? 0.6 : 1, transition: 'opacity 0.3s' }">
-      <WidgetsStatsD class="mb-2" />
+    <template v-else>
+      <LoadingBanner v-if="dashboard.isLoading" />
+
+      <!-- Future Date Warning Alert -->
+      <div
+        v-if="dashboard.futureDateWarning"
+        class="alert alert-warning alert-dismissible fade show mb-4 shadow-sm"
+        role="alert"
+      >
+        <div class="d-flex align-items-center">
+          <div class="me-3">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="32"
+              height="32"
+              fill="currentColor"
+              class="text-warning"
+              viewBox="0 0 16 16"
+            >
+              <path
+                d="M8.982 1.566a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767L8.982 1.566zM8 5c.535 0 .954.462.9.995l-.35 3.507a.552.552 0 0 1-1.1 0L7.1 5.995A.905.905 0 0 1 8 5zm.002 6a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"
+              />
+            </svg>
+          </div>
+          <div>
+            <h5 class="alert-heading mb-1 fw-bold">{{ dashboard.futureDateWarning.title }}</h5>
+            <p class="mb-0">{{ dashboard.futureDateWarning.message }}</p>
+          </div>
+        </div>
+      </div>
+
+      <div :style="{ opacity: dashboard.isLoading ? 0.6 : 1, transition: 'opacity 0.3s' }">
+        <WidgetsStatsD class="mb-2" />
 
       <ServiceTrendChart />
 
@@ -579,13 +626,44 @@ const formatDate = (dateStr) => {
         </CCol>
       </CRow>
       
-      <!-- Auto-scroll boundary marker - last section -->
-      <div data-auto-scroll-boundary style="height: 1px;"></div>
-    </div>
+        <!-- Auto-scroll boundary marker - last section -->
+        <div data-auto-scroll-boundary style="height: 1px;"></div>
+      </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
+.outage-slideshow-shell {
+  position: relative;
+  width: 100%;
+  min-height: calc(100vh - 120px);
+  overflow: hidden;
+  border-radius: 18px;
+  background: #f8fafc;
+}
+
+.outage-slideshow-track {
+  display: flex;
+  width: 100%;
+  min-height: calc(100vh - 120px);
+  transition: transform 0.9s ease-in-out;
+}
+
+.outage-slide {
+  flex: 0 0 100%;
+  min-height: calc(100vh - 120px);
+  background: #fff;
+}
+
+.outage-slide-image {
+  width: 100%;
+  height: 100%;
+  min-height: calc(100vh - 120px);
+  object-fit: cover;
+  display: block;
+}
+
 /* Scrollbar Styling */
 .custom-scrollbar::-webkit-scrollbar {
   height: 6px;
@@ -641,5 +719,14 @@ const formatDate = (dateStr) => {
 
 .chart-container {
   padding: 15px;
+}
+
+@media (max-width: 991.98px) {
+  .outage-slideshow-shell,
+  .outage-slideshow-track,
+  .outage-slide,
+  .outage-slide-image {
+    min-height: 60vh;
+  }
 }
 </style>

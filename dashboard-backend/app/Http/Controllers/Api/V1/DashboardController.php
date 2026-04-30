@@ -13,10 +13,45 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Http;
 use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
+    private function getRemoteApiAvailability(): bool
+    {
+        return Cache::remember('dashboard_remote_api_health_v1', 20, function () {
+            try {
+                $username = config('dashboard.sync.username', env('DASHBOARD_API_USERNAME'));
+                $password = config('dashboard.sync.password', env('DASHBOARD_API_PASSWORD'));
+                $baseUrl = config('dashboard.sync.base_url', env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard'));
+                $url = rtrim($baseUrl, '/') . '/' . now()->format('Ymd');
+
+                $response = Http::withBasicAuth($username, $password)
+                    ->connectTimeout(3)
+                    ->timeout(5)
+                    ->retry(1, 300)
+                    ->get($url);
+
+                if (!$response->successful()) {
+                    return false;
+                }
+
+                $body = trim((string) $response->body());
+
+                if ($body === '') {
+                    return false;
+                }
+
+                json_decode($body, true);
+
+                return json_last_error() === JSON_ERROR_NONE;
+            } catch (\Throwable $e) {
+                return false;
+            }
+        });
+    }
+
     private function rememberUnlessFresh(Request $request, string $cacheKey, int $ttl, callable $callback)
     {
         if ($request->boolean('fresh')) {
@@ -121,6 +156,7 @@ class DashboardController extends Controller
             'is_fully_aggregated' => $data['aggregated_days'] >= $data['expected_days'],
             'is_syncing' => $isSyncingNow,
             'active_batch_id' => $activeBatch ? $activeBatch->id : null,
+            'remote_api_available' => $this->getRemoteApiAvailability(),
             'cached_at' => now()->toDateTimeString(),
         ];
 
@@ -1164,6 +1200,7 @@ class DashboardController extends Controller
             'is_syncing' => $isSyncing,
             'active_batch_id' => $activeBatch ? $activeBatch->id : ($backgroundBatch ? $backgroundBatch->id : null),
             'is_silent_sync' => (!$isSyncing && $backgroundBatch !== null),
+            'remote_api_available' => $this->getRemoteApiAvailability(),
             'stat_updated' => $statTimestamp,
             'clinic_updated' => $clinicTimestamp,
             'timestamp' => now()->toDateTimeString(),

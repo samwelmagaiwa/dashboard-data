@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { useColorModes } from '@coreui/vue'
 import {
   CHeader,
@@ -33,6 +33,8 @@ const gapsModalVisible = ref(false)
 const forceGapRepair = ref(false)
 const dashboard = useDashboardStore()
 const { colorMode, setColorMode } = useColorModes('coreui-free-vue-admin-template-theme')
+const isRemoteOffline = computed(() => dashboard.remoteApiAvailable === false)
+const remoteStatusLabel = computed(() => (isRemoteOffline.value ? 'OFFLINE' : 'ONLINE'))
 
 const headerClassNames = ref('mb-4 p-0')
 const modalVisible = ref(false)
@@ -205,6 +207,14 @@ onMounted(() => {
       </CHeaderNav>
 
       <CHeaderNav class="ms-auto d-flex align-items-center">
+        <div
+          class="remote-status-pill me-3"
+          :class="isRemoteOffline ? 'status-offline' : 'status-online'"
+        >
+          <span class="status-orb"></span>
+          <span class="status-label">{{ remoteStatusLabel }}</span>
+        </div>
+
         <CDropdown variant="nav-item" placement="bottom-end" class="me-3">
           <CDropdownToggle :caret="false">
             <CIcon v-if="colorMode === 'dark'" icon="cil-moon" size="lg" />
@@ -409,6 +419,136 @@ onMounted(() => {
     </CModal>
   </CHeader>
 </template>
+
+<style scoped>
+.remote-status-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 154px;
+  min-width: 154px;
+  max-width: 154px;
+  padding: 4px 14px 4px 4px;
+  border-radius: 999px;
+  border: 3px solid #bfc4ca;
+  background: linear-gradient(180deg, #fafafa 0%, #d9dde2 52%, #f8fafc 100%);
+  box-shadow:
+    inset 0 2px 1px rgba(255, 255, 255, 0.95),
+    inset 0 -2px 2px rgba(100, 116, 139, 0.22),
+    0 6px 16px rgba(15, 23, 42, 0.16);
+  transition:
+    background 0.3s ease,
+    border-color 0.3s ease,
+    box-shadow 0.3s ease,
+    transform 0.3s ease;
+  flex: 0 0 154px;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.status-orb {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 4px solid #eef2f6;
+  box-shadow:
+    inset 0 10px 16px rgba(255, 255, 255, 0.38),
+    inset 0 -8px 14px rgba(0, 0, 0, 0.12),
+    0 0 0 6px #bfc4ca,
+    0 4px 10px rgba(15, 23, 42, 0.18);
+  flex-shrink: 0;
+}
+
+.status-label {
+  font-size: 0.88rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.16);
+  white-space: nowrap;
+}
+
+.status-online {
+  background:
+    linear-gradient(180deg, #fbfbfb 0%, #d7dce1 100%),
+    linear-gradient(90deg, #35f332 0%, #21d321 100%);
+  border-color: #bfc4ca;
+  position: relative;
+}
+
+.status-online .status-orb {
+  background: radial-gradient(circle at 35% 30%, #98ff8a 0%, #3eff2d 40%, #17be15 100%);
+  box-shadow:
+    inset 0 10px 16px rgba(255, 255, 255, 0.42),
+    inset 0 -8px 14px rgba(0, 0, 0, 0.16),
+    0 0 0 6px #bfc4ca,
+    0 0 18px rgba(62, 255, 45, 0.5);
+}
+
+.status-offline {
+  background:
+    linear-gradient(180deg, #fbfbfb 0%, #d7dce1 100%),
+    linear-gradient(90deg, #ff3838 0%, #df1111 100%);
+  border-color: #bfc4ca;
+  box-shadow:
+    inset 0 2px 1px rgba(255, 255, 255, 0.95),
+    inset 0 -2px 2px rgba(100, 116, 139, 0.22),
+    0 8px 18px rgba(220, 38, 38, 0.2);
+}
+
+.status-offline .status-orb {
+  background: radial-gradient(circle at 35% 30%, #ff9898 0%, #ff3636 42%, #c90d0d 100%);
+  box-shadow:
+    inset 0 10px 16px rgba(255, 255, 255, 0.4),
+    inset 0 -8px 14px rgba(0, 0, 0, 0.18),
+    0 0 0 6px #bfc4ca,
+    0 0 18px rgba(255, 54, 54, 0.42);
+}
+
+.remote-status-pill::after {
+  content: '';
+  position: absolute;
+  inset: 7px 10px 7px 38px;
+  border-radius: 999px;
+  z-index: 0;
+}
+
+.status-online::after {
+  background: linear-gradient(180deg, #49ff43 0%, #23d723 55%, #20bb20 100%);
+}
+
+.status-offline::after {
+  background: linear-gradient(180deg, #ff4d4d 0%, #f12020 55%, #cf1010 100%);
+}
+
+.status-orb,
+.status-label {
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 991.98px) {
+  .remote-status-pill {
+    width: 138px;
+    min-width: 138px;
+    max-width: 138px;
+    padding-right: 12px;
+    flex-basis: 138px;
+  }
+
+  .status-orb {
+    width: 38px;
+    height: 38px;
+  }
+
+  .status-label {
+    font-size: 0.76rem;
+  }
+}
+</style>
 
 <style scoped>
 .header-brand-text {

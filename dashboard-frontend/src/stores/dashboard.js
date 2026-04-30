@@ -68,6 +68,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const lastSyncFinished = ref(false)
   const isSyncWaiting = ref(false)
   const isUpToDate = ref(false)
+  const remoteApiAvailable = ref(null)
   const batchesAhead = ref(0)
   const syncMessage = ref('')
   const dismissedBatchId = ref(null)
@@ -83,10 +84,15 @@ export const useDashboardStore = defineStore('dashboard', () => {
       const res = await api.get('/dashboard/check-updates', {
         headers: { 'Cache-Control': 'no-cache' },
       })
+      const previousRemoteApiAvailability = remoteApiAvailable.value
       const newVersion = res.data.version
       const newVisitId = res.data.latest_visit_id || 0
       const newTodayCount = res.data.today_count || 0
       const newTotalCount = res.data.total_count || 0
+
+      if (typeof res.data.remote_api_available === 'boolean') {
+        remoteApiAvailable.value = res.data.remote_api_available
+      }
 
       const hasVersionChange = dataVersion.value && dataVersion.value !== newVersion
       const hasNewVisit = latestVisitId.value > 0 && newVisitId > latestVisitId.value
@@ -130,6 +136,14 @@ export const useDashboardStore = defineStore('dashboard', () => {
       latestVisitId.value = newVisitId
       todayCount.value = newTodayCount
       totalCount.value = newTotalCount
+
+      if (previousRemoteApiAvailability === false && remoteApiAvailable.value === true) {
+        const now = Date.now()
+        if (!activeBatchId.value && now - lastSilentRefresh > SILENT_REFRESH_COOLDOWN) {
+          lastSilentRefresh = now
+          fetchStats(true)
+        }
+      }
     } catch (e) {
       pollInterval.value = Math.min(pollInterval.value + 2000, 30000)
     }
@@ -330,6 +344,10 @@ export const useDashboardStore = defineStore('dashboard', () => {
         const { data } = await api.get(
           `/dashboard/snapshot?start_date=${start_date}&end_date=${end_date}&period=${period}${breakdownParam}${freshParam}&_t=${timestamp}`,
         )
+
+        if (typeof data?.stats?.meta?.remote_api_available === 'boolean') {
+          remoteApiAvailable.value = data.stats.meta.remote_api_available
+        }
 
         realStats.value = data.stats.stats
         previousStats.value = data.stats.previous_stats
@@ -977,5 +995,6 @@ export const useDashboardStore = defineStore('dashboard', () => {
     batchesAhead,
     syncMessage,
     isUpToDate,
+    remoteApiAvailable,
   }
 })

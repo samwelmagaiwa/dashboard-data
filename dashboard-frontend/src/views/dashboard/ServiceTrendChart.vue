@@ -252,7 +252,7 @@ const metricDetails = [
   { id: 'trend', label: 'Overall Trend', color: '#1e293b' },
   { id: 'opd', label: 'Total OPD', color: '#3b82f6' },
   { id: 'emergency', label: 'Emergency', color: '#dc3545' },
-  { id: 'consulted', label: 'Consulted', color: '#f97316' },
+  { id: 'consulted', label: 'Consulted', color: '#16a34a' },
   { id: 'not_consulted', label: 'Not Consulted', color: '#fbbf24' },
   { id: 'new', label: 'New Visits', color: '#06b6d4' },
   { id: 'followup', label: 'Follow-ups', color: '#6610f2' },
