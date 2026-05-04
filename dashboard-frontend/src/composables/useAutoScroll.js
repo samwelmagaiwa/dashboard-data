@@ -2,8 +2,15 @@ import { computed, ref } from 'vue'
 
 const STORAGE_ENABLED_KEY = 'dashboard:auto-scroll:enabled'
 const STORAGE_SPEED_KEY = 'dashboard:auto-scroll:speed'
+const STORAGE_SPEED_VALUES_KEY = 'dashboard:auto-scroll:speed-values'
 const DEFAULT_SPEED = 'slow'
-const SPEED_MAP = {
+const TOP_HOLD_MS = 20000
+const SPEED_VALUE_OPTIONS = {
+  slow: [5, 10, 15, 20],
+  medium: [30, 35, 40, 45],
+  fast: [50, 55, 60, 65],
+}
+const DEFAULT_SPEED_MAP = {
   slow: 20,
   medium: 35,
   fast: 50,
@@ -11,14 +18,42 @@ const SPEED_MAP = {
 
 const isEnabled = ref(false)
 const speed = ref(DEFAULT_SPEED)
+const speedValues = ref({ ...DEFAULT_SPEED_MAP })
 
 let scrollIntervalId = null
 let initialized = false
 let trackedPosition = 0
 let cachedMaxScroll = 0 // Cache the max scroll limit
-let isResetting = false // Cooldown flag after reset
+let scrollDirection = 'down'
+let holdUntil = 0
+let pendingScrollPixels = 0
 
-const pixelsPerSecond = computed(() => SPEED_MAP[speed.value] || SPEED_MAP[DEFAULT_SPEED])
+const normalizeSpeedValue = (value, fallback) => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.round(parsed)
+}
+
+const normalizePresetSpeedValue = (preset, value, fallback) => {
+  const allowedValues = SPEED_VALUE_OPTIONS[preset] || []
+  const normalized = normalizeSpeedValue(value, fallback)
+
+  if (allowedValues.includes(normalized)) {
+    return normalized
+  }
+
+  return fallback
+}
+
+const sanitizeSpeedValues = (values = {}) => ({
+  slow: normalizePresetSpeedValue('slow', values.slow, DEFAULT_SPEED_MAP.slow),
+  medium: normalizePresetSpeedValue('medium', values.medium, DEFAULT_SPEED_MAP.medium),
+  fast: normalizePresetSpeedValue('fast', values.fast, DEFAULT_SPEED_MAP.fast),
+})
+
+const pixelsPerSecond = computed(
+  () => speedValues.value[speed.value] || speedValues.value[DEFAULT_SPEED] || DEFAULT_SPEED_MAP[DEFAULT_SPEED],
+)
 
 const canUseDom = () => typeof window !== 'undefined' && typeof document !== 'undefined'
 
@@ -83,10 +118,7 @@ const doScroll = () => {
     return
   }
 
-  // During cooldown after reset, skip this tick
-  if (isResetting) {
-    isResetting = false
-    console.log('[AutoScroll] Cooldown tick - skipping')
+  if (holdUntil > Date.now()) {
     return
   }
 
@@ -98,52 +130,41 @@ const doScroll = () => {
 
   // Use cached maxScroll (refreshed less frequently)
   const maxScroll = getScrollLimit()
-  
-  // Check if our tracked position has reached or exceeded the bottom
-  if (trackedPosition >= maxScroll) {
-    console.log('[AutoScroll] >>> AT BOTTOM - RESETTING TO TOP <<<')
-    trackedPosition = 0
-    
-    // Force reset to absolute top - ALL methods
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
-    document.documentElement.scrollTop = 0
-    document.documentElement.scrollLeft = 0
-    document.body.scrollTop = 0
-    document.body.scrollLeft = 0
-    
-    // Set cooldown to skip next tick
-    isResetting = true
-    
-    // Force refresh maxScroll on next loop
-    cachedMaxScroll = 0
-    
-    return
-  }
-  
-  // Calculate next position
-  const scrollAmount = pixelsPerSecond.value / 60
-  const nextPosition = trackedPosition + scrollAmount
-  
-  // If next position would exceed max, reset immediately instead
-  if (nextPosition >= maxScroll) {
-    console.log('[AutoScroll] >>> WOULD EXCEED - RESETTING TO TOP <<<')
-    trackedPosition = 0
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
-    document.documentElement.scrollTop = 0
-    document.documentElement.scrollLeft = 0
-    document.body.scrollTop = 0
-    document.body.scrollLeft = 0
-    
-    // Set cooldown to skip next tick
-    isResetting = true
-    
-    // Force refresh maxScroll on next loop
-    cachedMaxScroll = 0
-    
+  trackedPosition = Math.min(Math.max(window.scrollY || scrollRoot.scrollTop || 0, 0), maxScroll)
+
+  pendingScrollPixels += pixelsPerSecond.value / 60
+  const scrollStep = Math.floor(pendingScrollPixels)
+
+  if (scrollStep <= 0) {
     return
   }
 
-  // Normal scroll - update BOTH elements for consistency
+  pendingScrollPixels -= scrollStep
+
+  const delta = scrollDirection === 'down' ? scrollStep : -scrollStep
+  const nextPosition = trackedPosition + delta
+
+  if (scrollDirection === 'down' && nextPosition >= maxScroll) {
+    trackedPosition = maxScroll
+    scrollDirection = 'up'
+    cachedMaxScroll = 0
+    window.scrollTo(0, trackedPosition)
+    document.documentElement.scrollTop = trackedPosition
+    document.body.scrollTop = trackedPosition
+    return
+  }
+
+  if (scrollDirection === 'up' && nextPosition <= 0) {
+    trackedPosition = 0
+    scrollDirection = 'down'
+    holdUntil = Date.now() + TOP_HOLD_MS
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+    document.documentElement.scrollTop = 0
+    document.body.scrollTop = 0
+    cachedMaxScroll = 0
+    return
+  }
+
   trackedPosition = nextPosition
   window.scrollTo(0, trackedPosition)
   document.documentElement.scrollTop = trackedPosition
@@ -162,7 +183,9 @@ const start = () => {
   stopScroll()
   trackedPosition = 0
   cachedMaxScroll = 0 // Reset cache
-  isResetting = true // Start with cooldown
+  scrollDirection = 'down'
+  holdUntil = 0
+  pendingScrollPixels = 0
   
   // Force to top immediately
   window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
@@ -176,6 +199,7 @@ const start = () => {
 }
 
 const stop = () => {
+  pendingScrollPixels = 0
   stopScroll()
 }
 
@@ -184,6 +208,7 @@ const applyState = () => {
 
   window.localStorage.setItem(STORAGE_ENABLED_KEY, String(isEnabled.value))
   window.localStorage.setItem(STORAGE_SPEED_KEY, speed.value)
+  window.localStorage.setItem(STORAGE_SPEED_VALUES_KEY, JSON.stringify(speedValues.value))
 
   if (isEnabled.value) {
     // Reset to top before starting
@@ -208,8 +233,17 @@ export function initAutoScroll() {
   isEnabled.value = window.localStorage.getItem(STORAGE_ENABLED_KEY) === 'true'
 
   const savedSpeed = window.localStorage.getItem(STORAGE_SPEED_KEY)
-  if (savedSpeed && SPEED_MAP[savedSpeed]) {
+  if (savedSpeed && DEFAULT_SPEED_MAP[savedSpeed]) {
     speed.value = savedSpeed
+  }
+
+  const savedSpeedValues = window.localStorage.getItem(STORAGE_SPEED_VALUES_KEY)
+  if (savedSpeedValues) {
+    try {
+      speedValues.value = sanitizeSpeedValues(JSON.parse(savedSpeedValues))
+    } catch {
+      speedValues.value = { ...DEFAULT_SPEED_MAP }
+    }
   }
 
   if (isEnabled.value) {
@@ -226,15 +260,29 @@ export function useAutoScroll() {
   }
 
   const setSpeed = (value) => {
-    speed.value = SPEED_MAP[value] ? value : DEFAULT_SPEED
+    speed.value = DEFAULT_SPEED_MAP[value] ? value : DEFAULT_SPEED
+    applyState()
+  }
+
+  const setSpeedValue = (preset, value) => {
+    if (!DEFAULT_SPEED_MAP[preset]) return
+
+    speedValues.value = {
+      ...speedValues.value,
+      [preset]: normalizePresetSpeedValue(preset, value, DEFAULT_SPEED_MAP[preset]),
+    }
+
     applyState()
   }
 
   return {
     isEnabled,
     speed,
+    speedValues,
+    speedValueOptions: SPEED_VALUE_OPTIONS,
     toggle,
     setSpeed,
+    setSpeedValue,
     speedOptions: [
       { value: 'slow', label: 'Slow' },
       { value: 'medium', label: 'Medium' },
@@ -249,5 +297,7 @@ export function getAutoScrollState() {
   return {
     isEnabled,
     speed,
+    speedValues,
+    speedValueOptions: SPEED_VALUE_OPTIONS,
   }
 }

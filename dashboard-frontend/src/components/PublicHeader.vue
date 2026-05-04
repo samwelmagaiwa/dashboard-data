@@ -426,11 +426,11 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 10px;
-  width: 154px;
-  min-width: 154px;
-  max-width: 154px;
-  padding: 4px 14px 4px 4px;
+  gap: 8px;
+  width: 122px;
+  min-width: 122px;
+  max-width: 122px;
+  padding: 3px 10px 3px 3px;
   border-radius: 999px;
   border: 3px solid #bfc4ca;
   background: linear-gradient(180deg, #fafafa 0%, #d9dde2 52%, #f8fafc 100%);
@@ -443,26 +443,26 @@ onMounted(() => {
     border-color 0.3s ease,
     box-shadow 0.3s ease,
     transform 0.3s ease;
-  flex: 0 0 154px;
+  flex: 0 0 122px;
   overflow: hidden;
   isolation: isolate;
 }
 
 .status-orb {
-  width: 44px;
-  height: 44px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
-  border: 4px solid #eef2f6;
+  border: 3px solid #eef2f6;
   box-shadow:
-    inset 0 10px 16px rgba(255, 255, 255, 0.38),
-    inset 0 -8px 14px rgba(0, 0, 0, 0.12),
-    0 0 0 6px #bfc4ca,
-    0 4px 10px rgba(15, 23, 42, 0.18);
+    inset 0 8px 12px rgba(255, 255, 255, 0.38),
+    inset 0 -6px 10px rgba(0, 0, 0, 0.12),
+    0 0 0 4px #bfc4ca,
+    0 3px 8px rgba(15, 23, 42, 0.18);
   flex-shrink: 0;
 }
 
 .status-label {
-  font-size: 0.88rem;
+  font-size: 0.66rem;
   font-weight: 900;
   letter-spacing: 0.05em;
   line-height: 1;
@@ -482,10 +482,10 @@ onMounted(() => {
 .status-online .status-orb {
   background: radial-gradient(circle at 35% 30%, #98ff8a 0%, #3eff2d 40%, #17be15 100%);
   box-shadow:
-    inset 0 10px 16px rgba(255, 255, 255, 0.42),
-    inset 0 -8px 14px rgba(0, 0, 0, 0.16),
-    0 0 0 6px #bfc4ca,
-    0 0 18px rgba(62, 255, 45, 0.5);
+    inset 0 8px 12px rgba(255, 255, 255, 0.42),
+    inset 0 -6px 10px rgba(0, 0, 0, 0.16),
+    0 0 0 4px #bfc4ca,
+    0 0 14px rgba(62, 255, 45, 0.45);
 }
 
 .status-offline {
@@ -502,16 +502,16 @@ onMounted(() => {
 .status-offline .status-orb {
   background: radial-gradient(circle at 35% 30%, #ff9898 0%, #ff3636 42%, #c90d0d 100%);
   box-shadow:
-    inset 0 10px 16px rgba(255, 255, 255, 0.4),
-    inset 0 -8px 14px rgba(0, 0, 0, 0.18),
-    0 0 0 6px #bfc4ca,
-    0 0 18px rgba(255, 54, 54, 0.42);
+    inset 0 8px 12px rgba(255, 255, 255, 0.4),
+    inset 0 -6px 10px rgba(0, 0, 0, 0.18),
+    0 0 0 4px #bfc4ca,
+    0 0 14px rgba(255, 54, 54, 0.4);
 }
 
 .remote-status-pill::after {
   content: '';
   position: absolute;
-  inset: 7px 10px 7px 38px;
+  inset: 6px 8px 6px 30px;
   border-radius: 999px;
   z-index: 0;
 }
@@ -532,20 +532,20 @@ onMounted(() => {
 
 @media (max-width: 991.98px) {
   .remote-status-pill {
-    width: 138px;
-    min-width: 138px;
-    max-width: 138px;
-    padding-right: 12px;
-    flex-basis: 138px;
+    width: 112px;
+    min-width: 112px;
+    max-width: 112px;
+    padding-right: 9px;
+    flex-basis: 112px;
   }
 
   .status-orb {
-    width: 38px;
-    height: 38px;
+    width: 30px;
+    height: 30px;
   }
 
   .status-label {
-    font-size: 0.76rem;
+    font-size: 0.6rem;
   }
 }
 </style>
