@@ -863,35 +863,36 @@ export const useDashboardStore = defineStore('dashboard', () => {
     },
   ])
 
-  const metrics = computed(() => {
-    if (realStats.value) {
-      const s = realStats.value
-      return [
-        { title: 'PUBLIC', value: (s.public || 0).toLocaleString() },
-        { title: 'NHIF', value: (s.nhif_visits || 0).toLocaleString() },
-        { title: 'IPPM - PRIVATE', value: (s.ippm_private || 0).toLocaleString() },
-        { title: 'IPPM - CREDIT', value: (s.ippm_credit || 0).toLocaleString() },
-        { title: 'COST SHARING', value: (s.cost_sharing || 0).toLocaleString() },
-        { title: 'NSSF', value: (s.nssf || 0).toLocaleString() },
-        { title: 'FOREIGNER', value: (s.foreigner || 0).toLocaleString() },
-        { title: 'Total Visits', value: (s.total_visits || 0).toLocaleString() },
-        { title: 'Total OPD Count', value: (s.total_patients || 0).toLocaleString() },
-        { title: 'Total Emergency Count', value: (s.emergency_visits || 0).toLocaleString() },
-        { title: 'Total Consulted Count', value: (s.consulted || 0).toLocaleString() },
-        { title: 'Not Consulted Count', value: (s.pending || 0).toLocaleString() },
-        { title: 'New Visits Count', value: (s.new_visits || 0).toLocaleString() },
-        { title: 'Followups Count', value: (s.followups || 0).toLocaleString() },
-        { title: 'Neonate (0-28d)', value: (s.neonate_count || 0).toLocaleString() },
-        { title: 'Infant (29d-1y)', value: (s.infant_count || 0).toLocaleString() },
-        { title: 'Child (1-12y)', value: (s.child_count || 0).toLocaleString() },
-        { title: 'Adolescent (13-17y)', value: (s.adolescent_count || 0).toLocaleString() },
-        { title: 'Adult (18-59y)', value: (s.adult_count || 0).toLocaleString() },
-        { title: 'Elderly (60y+)', value: (s.elderly_count || 0).toLocaleString() },
-        { title: 'Duplicated Data Count', value: (s.duplicates || 0).toLocaleString() },
-      ]
-    }
-    return []
-  })
+   const metrics = computed(() => {
+     if (realStats.value) {
+       const s = realStats.value
+       const age = s.age_groups || {}
+       return [
+         { title: 'PUBLIC', value: (s.public || 0).toLocaleString() },
+         { title: 'NHIF', value: (s.nhif_visits || 0).toLocaleString() },
+         { title: 'IPPM - PRIVATE', value: (s.ippm_private || 0).toLocaleString() },
+         { title: 'IPPM - CREDIT', value: (s.ippm_credit || 0).toLocaleString() },
+         { title: 'COST SHARING', value: (s.cost_sharing || 0).toLocaleString() },
+         { title: 'NSSF', value: (s.nssf || 0).toLocaleString() },
+         { title: 'FOREIGNER', value: (s.foreigner || 0).toLocaleString() },
+         { title: 'Total Visits', value: (s.total_visits || 0).toLocaleString() },
+         { title: 'Total OPD Count', value: (s.total_patients || 0).toLocaleString() },
+         { title: 'Total Emergency Count', value: (s.emergency_visits || 0).toLocaleString() },
+         { title: 'Total Consulted Count', value: (s.consulted || 0).toLocaleString() },
+         { title: 'Not Consulted Count', value: (s.pending || 0).toLocaleString() },
+         { title: 'New Visits Count', value: (s.new_visits || 0).toLocaleString() },
+         { title: 'Followups Count', value: (s.followups || 0).toLocaleString() },
+         { title: 'Neonate (0-28d)', value: (age.neonate || 0).toLocaleString() },
+         { title: 'Infant (29d-1y)', value: (age.infant || 0).toLocaleString() },
+         { title: 'Child (1-12y)', value: (age.child || 0).toLocaleString() },
+         { title: 'Adolescent (13-17y)', value: (age.adolescent || 0).toLocaleString() },
+         { title: 'Adult (18-59y)', value: (age.adult || 0).toLocaleString() },
+         { title: 'Elderly (60y+)', value: (age.elderly || 0).toLocaleString() },
+         { title: 'Duplicated Data Count', value: (s.duplicates || 0).toLocaleString() },
+       ]
+     }
+     return []
+   })
 
   const jumpDate = (direction) => {
     const delta = direction === 'next' ? 1 : -1
