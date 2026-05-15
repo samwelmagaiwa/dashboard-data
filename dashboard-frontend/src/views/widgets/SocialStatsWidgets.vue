@@ -4,7 +4,7 @@ import { CIcon } from '@coreui/icons-vue'
 import {
   cilBed,
   cilPeople,
-  cilMedicalCross, // Keeping this as 'cilMedi cilClock' is a syntax error
+  cilMedicalCross,
   cilClock,
   cilXCircle,
   cilChartLine,
@@ -14,6 +14,7 @@ import {
   cilUser, 
   cilChevronBottom,
   cilChevronTop,
+  cilInfo,
 } from '@coreui/icons'
 import { useDashboardStore } from '@/stores/dashboard'
 import { ref, watch } from 'vue'
@@ -23,6 +24,7 @@ const dashboard = useDashboardStore()
 const getValue = (key) => {
   return (dashboard.realStats?.[key] || 0).toLocaleString()
 }
+
 
 const getPrevValue = (key) => {
   return (dashboard.previousStats?.[key] || 0).toLocaleString()
@@ -183,19 +185,67 @@ watch(
         </div>
       </CCol>
 
-      <!-- Not Consulted -->
       <CCol class="metric-col">
         <div
-          class="stat-card premium-shadow shadow-amber"
-          :class="{ expanded: showPendingList }"
-          style="border-left: 4px solid #fbbf24; border-top: 1px solid #fbbf24"
+          class="stat-card premium-shadow"
+          :class="[
+            dashboard.isTodaySelected ? 'shadow-pink pink-theme-active' : 'shadow-red red-theme-active',
+            { expanded: showPendingList },
+          ]"
         >
+          <!-- Notch Borders -->
+          <div class="notch-border top" :class="dashboard.isTodaySelected ? 'pink' : 'red'"></div>
+          <div class="notch-border bottom" :class="dashboard.isTodaySelected ? 'pink' : 'red'"></div>
+          <!-- Decorative backgrounds for red theme -->
+          <div v-if="!dashboard.isTodaySelected" class="decorative-curve-image"></div>
+          <div v-if="!dashboard.isTodaySelected" class="vertical-dots"></div>
+          <div v-if="!dashboard.isTodaySelected" class="status-info-icon mirror-design">
+            <CIcon :icon="cilInfo" />
+          </div>
+
           <div class="stat-card-header mb-1" @click="togglePendingList" style="cursor: pointer">
-            <div class="stat-icon-wrapper" style="background-color: rgba(251, 191, 36, 0.15)">
-              <CIcon :icon="cilClock" class="stat-icon" style="color: #fbbf24" />
+            <div
+              class="stat-icon-wrapper larger-icon"
+              :class="{ 'glass-morphism-red': !dashboard.isTodaySelected }"
+              :style="{
+                backgroundColor: dashboard.isTodaySelected
+                  ? 'rgba(236, 72, 153, 0.15)'
+                  : 'transparent',
+              }"
+            >
+              <div v-if="!dashboard.isTodaySelected" class="custom-icon-container">
+                <!-- Custom SVG: Two people at a desk facing each other -->
+                <svg viewBox="0 0 24 24" class="stat-icon main-icon" style="color: #FF0000">
+                  <!-- Table -->
+                  <rect x="4" y="14" width="16" height="1.5" rx="0.75" fill="currentColor" />
+                  <rect x="11" y="15.5" width="2" height="4.5" fill="currentColor" />
+                  
+                  <!-- Left Person -->
+                  <circle cx="6" cy="8" r="2.5" fill="currentColor" />
+                  <path d="M2 14c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5v1H2v-1z" fill="currentColor" />
+                  
+                  <!-- Right Person -->
+                  <circle cx="18" cy="8" r="2.5" fill="currentColor" />
+                  <path d="M15 14c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5v1H15v-1z" fill="currentColor" />
+                </svg>
+                <!-- Overlaid 'No' symbol -->
+                <div class="icon-overlay-no">
+                  <CIcon :icon="cilXCircle" size="sm" />
+                </div>
+              </div>
+              <CIcon
+                v-else
+                :icon="cilClock"
+                class="stat-icon"
+                :style="{ color: '#ec4899' }"
+              />
             </div>
             <div class="stat-main-info">
-              <h3 class="stat-value" style="color: #fbbf24">
+              <h3
+                class="stat-value"
+                :class="{ 'red-text-shadow': !dashboard.isTodaySelected }"
+                :style="{ color: dashboard.isTodaySelected ? '#ec4899' : '#FF0000' }"
+              >
                 {{ getValue('pending') }}
                 <CIcon
                   :icon="showPendingList ? cilChevronTop : cilChevronBottom"
@@ -203,16 +253,26 @@ watch(
                   class="ms-1 dropdown-arrow"
                 />
               </h3>
-              <span class="stat-label">Not Consulted</span>
+              <span
+                class="stat-label"
+                :class="{ 'red-text-shadow-sm': !dashboard.isTodaySelected }"
+              >
+                {{ dashboard.isTodaySelected ? 'Await Consultation' : 'Not Consulted' }}
+              </span>
             </div>
           </div>
           <div
             v-if="dashboard.compLabel"
-            class="stat-card-footer mt-auto pt-1"
+            class="stat-card-footer mt-auto"
+            :class="{ 'design-mirror-footer': !dashboard.isTodaySelected }"
           >
             <div class="stat-comparison">
-              <span class="prev-value text-muted">{{ getPrevValue('pending') }}</span>
-              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
+              <h4 class="prev-value mb-0" :class="{ 'design-mirror-prev': !dashboard.isTodaySelected }">
+                {{ getPrevValue('pending') }}
+              </h4>
+              <span class="prev-label" :class="{ 'design-mirror-label': !dashboard.isTodaySelected }">
+                {{ dashboard.compLabel }}
+              </span>
             </div>
           </div>
 
@@ -303,7 +363,7 @@ watch(
 }
 
 .stat-card.expanded {
-  border-bottom: 3px solid #fbbf24;
+  border-bottom: 3px solid #ec4899;
   z-index: 1051; /* Higher than siblings when open */
 }
 
@@ -432,7 +492,7 @@ watch(
   background: transparent;
 }
 .pending-list-container::-webkit-scrollbar-thumb {
-  background: #fbbf24;
+  background: #ec4899;
   border-radius: 10px;
 }
 /* Colored Shadow Effects - More pronounced default state */
@@ -463,15 +523,239 @@ watch(
   box-shadow: 0 12px 30px -5px rgba(0, 128, 0, 0.6) !important;
 }
 
-.shadow-amber {
+.shadow-pink {
   box-shadow:
-    0 6px 20px -4px rgba(251, 191, 36, 0.4),
-    0 4px 12px -2px rgba(251, 191, 36, 0.2) !important;
+    0 6px 20px -4px rgba(236, 72, 153, 0.4),
+    0 4px 12px -2px rgba(236, 72, 153, 0.2) !important;
 }
-.shadow-amber:hover {
-  box-shadow: 0 12px 30px -5px rgba(251, 191, 36, 0.6) !important;
+.shadow-pink:hover {
+  box-shadow: 0 12px 30px -5px rgba(236, 72, 153, 0.6) !important;
 }
 
+.shadow-red {
+  box-shadow:
+    0 6px 20px -4px rgba(239, 68, 68, 0.4),
+    0 4px 12px -2px rgba(239, 68, 68, 0.2) !important;
+}
+.shadow-red:hover {
+  box-shadow: 0 12px 30px -5px rgba(239, 68, 68, 0.6) !important;
+}
+
+.status-info-icon.mirror-design {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  width: 38px;
+  height: 38px;
+  background: white;
+  color: #ff0000;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  box-shadow: 0 0 15px rgba(255, 0, 0, 0.2);
+  border: 1.5px solid #ff0000;
+}
+
+.status-info-icon.mirror-design :deep(svg) {
+  width: 20px;
+  height: 20px;
+}
+
+.notch-border {
+  position: absolute;
+  z-index: 5;
+}
+
+.notch-border.red { background: #ff0000; }
+.notch-border.pink { background: #ec4899; }
+
+.notch-border.top {
+  top: 0;
+  left: 0;
+  width: 70%;
+  height: 4px;
+  border-radius: 0 0 4px 0;
+  clip-path: polygon(0 0, 100% 0, 95% 100%, 0 100%);
+}
+
+.notch-border.bottom {
+  bottom: 0;
+  left: 0;
+  width: 35%;
+  height: 8px;
+  border-radius: 0 4px 0 0;
+  clip-path: polygon(0 0, 90% 0, 100% 100%, 0 100%);
+}
+
+.pink-theme-active {
+  background-color: white !important;
+  border-left: 4px solid #ec4899 !important;
+  border-top: 1px solid #fdf2f8 !important;
+  border-right: 1px solid #fdf2f8 !important;
+  border-bottom: 1px solid #fdf2f8 !important;
+  position: relative;
+}
+
+.red-theme-active {
+  background-color: white !important;
+  border-left: 4px solid #ff0000 !important;
+  border-top: 1px solid #fee2e2 !important;
+  border-right: 1px solid #fee2e2 !important;
+  border-bottom: 1px solid #fee2e2 !important;
+  position: relative;
+}
+
+.stat-card.expanded {
+  overflow: visible !important;
+}
+
+.stat-card:not(.expanded) {
+  overflow: hidden !important;
+}
+
+.decorative-curve-image {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at 80% 20%, rgba(255, 0, 0, 0.05) 0%, transparent 50%),
+              radial-gradient(circle at 90% 60%, rgba(255, 0, 0, 0.03) 0%, transparent 40%);
+  pointer-events: none;
+}
+
+.vertical-dots {
+  position: absolute;
+  right: 12px;
+  bottom: 45px;
+  height: 40px;
+  width: 4px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  z-index: 5;
+}
+
+.vertical-dots::before {
+  content: "";
+  height: 100%;
+  width: 100%;
+  background-image: radial-gradient(#ff0000 1.5px, transparent 1.5px);
+  background-size: 4px 8px;
+}
+
+.design-mirror-footer {
+  background: #f1f3f7 !important;
+  border-radius: 18px !important;
+  padding: 12px 20px !important;
+  margin: 10px !important;
+  display: flex;
+  align-items: center;
+}
+
+.design-mirror-prev {
+  font-size: 1.5rem !important;
+  font-weight: 800 !important;
+  color: #2d3748 !important;
+}
+
+.design-mirror-label {
+  font-size: 0.85rem !important;
+  font-weight: 600 !important;
+  color: #718096 !important;
+  text-transform: uppercase;
+  margin-left: 8px;
+}
+
+.red-text-shadow {
+  text-shadow: 0 2px 8px rgba(255, 0, 0, 0.1);
+}
+
+.red-theme-active::before {
+  content: "";
+  position: absolute;
+  top: -10%;
+  right: -5%;
+  width: 250px;
+  height: 150%;
+  background: radial-gradient(ellipse at 100% 0%, rgba(255, 0, 0, 0.04) 0%, transparent 70%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.red-theme-active::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, transparent 80%, rgba(255, 0, 0, 0.02) 100%);
+  pointer-events: none;
+}
+
+.larger-icon {
+  width: 72px !important;
+  height: 72px !important;
+  border-radius: 16px !important;
+  position: relative;
+}
+
+.glass-morphism-red {
+  background: rgba(255, 0, 0, 0.05) !important;
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 0, 0, 0.2) !important;
+  box-shadow: 
+    0 8px 32px 0 rgba(255, 0, 0, 0.1),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.4) !important;
+}
+
+.custom-icon-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.main-icon {
+  width: 44px !important;
+  height: 44px !important;
+}
+
+.icon-overlay-no {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: white;
+  color: #ff0000;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  z-index: 5;
+}
+
+.icon-overlay-no :deep(svg) {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.stat-card-header {
+  position: relative;
+  z-index: 2;
+}
+
+.stat-card-footer {
+  position: relative;
+  z-index: 2;
+}
 .shadow-cyan {
   box-shadow:
     0 6px 20px -4px rgba(6, 182, 212, 0.4),
@@ -554,47 +838,6 @@ watch(
   }
 }
 
-/* Metrics Grid */
-.metrics-grid {
-  width: 100%;
-}
-
-.stat-card {
-  height: 100%;
-  padding: 1.25rem 1rem; /* More vertical padding */
-  background: white;
-  border-radius: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  min-height: 135px; /* Added min-height for more presence */
-}
-
-.stat-card-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.stat-icon-wrapper {
-  flex-shrink: 0;
-  width: 44px; /* Enlarged icon wrapper */
-  height: 44px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.stat-icon {
-  width: 22px; /* Enlarged icon */
-  height: 22px;
-}
-
-.metrics-grid {
-  overflow: visible; /* Allow shadows to show without padding on desktop */
-}
-
 @media (max-width: 991.98px) {
   .metrics-grid {
     overflow-x: auto;
@@ -607,12 +850,49 @@ watch(
     flex-wrap: nowrap !important;
   }
 }
-
 .metric-col {
   transition: all 0.3s ease;
 }
 
 .emergency-card:hover {
   box-shadow: 0 12px 24px rgba(220, 53, 69, 0.15) !important;
+}
+
+/* Metrics Grid & Compact Card Styles */
+.metrics-grid {
+  width: 100%;
+  overflow: visible;
+}
+
+.stat-card {
+  height: 100%;
+  padding: 0.7rem 0.6rem !important;
+  background: white;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem !important;
+  min-height: 105px !important;
+}
+
+.stat-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem !important;
+}
+
+.stat-icon-wrapper {
+  flex-shrink: 0;
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 6px !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stat-icon {
+  width: 16px !important;
+  height: 16px !important;
 }
 </style>

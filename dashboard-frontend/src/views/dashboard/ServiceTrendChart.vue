@@ -94,9 +94,9 @@ const formatTrendDayLabel = (date) => {
     return 'Yesterday'
   }
 
-  const weekday = date.toLocaleDateString('en-US', { weekday: 'long' })
+  const weekday = date.toLocaleDateString('en-US', { weekday: 'short' })
   const day = String(date.getDate()).padStart(2, '0')
-  return `${weekday} - ${day}`
+  return `${day} ${weekday}`
 }
 
 const rawTrendData = computed(() => dashboard.serviceTrendData || { labels: [], datasets: [] })
@@ -127,9 +127,7 @@ const normalizedTrendData = computed(() => {
       const [y, m, d] = dateStr.split('-')
       const date = new Date(parseInt(y), parseInt(m) - 1, parseInt(d))
       date.setHours(0, 0, 0, 0)
-      const weekday = date.toLocaleDateString('en-US', { weekday: 'short' })
-      const dayStr = String(date.getDate()).padStart(2, '0')
-      return `${dayStr} ${weekday}`
+      return formatTrendDayLabel(date)
     })
 
     // Create a mapping of DateKey -> Index for reliable lookup
@@ -140,8 +138,9 @@ const normalizedTrendData = computed(() => {
     return {
       ...rawData,
       labels: freshLabels,
-      datasets: (rawData.datasets || []).map((ds) => ({
+      datasets: (rawData.datasets || []).map((ds, i) => ({
         ...ds,
+        label: metricDetails.value[i]?.label || ds.label,
         data: rawData.dates.map((dateKey) => {
           const rawIdx = dateToIndexMap.get(dateKey)
           return ds.data?.[rawIdx] ?? 0
@@ -187,8 +186,9 @@ const normalizedTrendData = computed(() => {
   return {
     ...rawData,
     labels: targetLabels,
-    datasets: (rawData.datasets || []).map((dataset) => ({
+    datasets: (rawData.datasets || []).map((dataset, i) => ({
       ...dataset,
+      label: metricDetails.value[i]?.label || dataset.label,
       data: targetLabels.map((_, index) => {
         const date = targetDates[index]
         const y = date.getFullYear()
@@ -248,15 +248,15 @@ const needsScroll = computed(() => {
   return labels.length > threshold
 })
 
-const metricDetails = [
+const metricDetails = computed(() => [
   { id: 'trend', label: 'Overall Trend', color: '#1e293b' },
   { id: 'opd', label: 'Total OPD', color: '#3b82f6' },
   { id: 'emergency', label: 'Emergency', color: '#dc3545' },
   { id: 'consulted', label: 'Consulted', color: '#16a34a' },
-  { id: 'not_consulted', label: 'Not Consulted', color: '#fbbf24' },
+  { id: 'not_consulted', label: dashboard.isTodaySelected ? 'Await Consultation' : 'Not Consulted', color: '#ec4899' },
   { id: 'new', label: 'New Visits', color: '#06b6d4' },
   { id: 'followup', label: 'Follow-ups', color: '#6610f2' },
-]
+])
 
 const keyReferralMap = {
   '000037': 'SELF REFERRAL',
@@ -289,7 +289,7 @@ const barLabelsPlugin = {
 
     chart.data.datasets.forEach((dataset, datasetIndex) => {
       const meta = chart.getDatasetMeta(datasetIndex)
-      const color = metricDetails[datasetIndex]?.color || '#333'
+      const color = metricDetails.value[datasetIndex]?.color || '#333'
 
       meta.data.forEach((bar, index) => {
         const value = dataset.data[index]
@@ -342,7 +342,7 @@ const chartData = computed(() => {
   return {
     ...rawData,
     datasets: rawData.datasets.map((ds, index) => {
-      const color = metricDetails[index]?.color || ds.backgroundColor
+      const color = metricDetails.value[index]?.color || ds.backgroundColor
       const isTrendDataset = index === 0 || ds.type === 'line'
       return {
         ...ds,
@@ -445,8 +445,21 @@ const chartOptions = computed(() => {
         usePointStyle: true,
         callbacks: {
           label: (context) => {
-            const label = context.dataset.label || ''
+            let label = context.dataset.label || ''
             const value = context.raw || 0
+            
+            // Special handling for Await Consultation / Not Consulted dataset
+            // Usually at index 4, but we check if the label starts with either
+            if (label === 'Await Consultation' || label === 'Not Consulted') {
+              const xLabel = context.label || ''
+              // If the x-axis label is not 'Today', it should be 'Not Consulted'
+              if (xLabel !== 'Today' && !xLabel.toLowerCase().includes('today')) {
+                label = 'Not Consulted'
+              } else {
+                label = 'Await Consultation'
+              }
+            }
+            
             return `${label}: ${value.toLocaleString()}`
           },
         },

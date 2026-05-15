@@ -271,6 +271,12 @@ export const useDashboardStore = defineStore('dashboard', () => {
     return checkDate > today
   }
 
+  const isTodaySelected = computed(() => {
+    const { start_date, end_date } = calculateDateRange()
+    const todayStr = formatDate(new Date())
+    return start_date === todayStr && end_date === todayStr
+  })
+
   const clearSyncStatus = () => {
     if (activeBatchId.value) {
       dismissedBatchId.value = activeBatchId.value
@@ -879,7 +885,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
          { title: 'Total OPD Count', value: (s.total_patients || 0).toLocaleString() },
          { title: 'Total Emergency Count', value: (s.emergency_visits || 0).toLocaleString() },
          { title: 'Total Consulted Count', value: (s.consulted || 0).toLocaleString() },
-         { title: 'Not Consulted Count', value: (s.pending || 0).toLocaleString() },
+         { title: isTodaySelected.value ? 'Await Consultation Count' : 'Not Consulted Count', value: (s.pending || 0).toLocaleString() },
          { title: 'New Visits Count', value: (s.new_visits || 0).toLocaleString() },
          { title: 'Followups Count', value: (s.followups || 0).toLocaleString() },
          { title: 'Neonate (0-28d)', value: (age.neonate || 0).toLocaleString() },
@@ -997,5 +1003,6 @@ export const useDashboardStore = defineStore('dashboard', () => {
     syncMessage,
     isUpToDate,
     remoteApiAvailable,
+    isTodaySelected,
   }
 })
