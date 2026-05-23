@@ -459,7 +459,7 @@ const getPercentage = (valueTitle, totalTitle) => {
       <div class="diseases-snapshot-container premium-shadow mb-4 overflow-hidden rounded-4">
         <div class="p-4">
           <div class="mb-4 d-flex flex-column gap-3">
-            <h2 class="diseases-title fw-bold mb-0">Top 10 Diseases</h2>
+            <h2 class="diseases-title fw-bold mb-0">Top 10 leading Cases by Department</h2>
 
             <div v-if="topDiseasesChartData.datasets.length > 0" class="d-flex flex-wrap gap-3 align-items-center">
               <button
@@ -509,7 +509,7 @@ const getPercentage = (valueTitle, totalTitle) => {
             <!-- Top 3 Circular List Area -->
             <CCol :lg="3">
               <div class="p-3 rounded-4 diseases-chart-card h-100 d-flex flex-column">
-                <h6 class="diseases-panel-title small fw-bold text-uppercase letter-spacing-1 mb-4">Top 3 Leading Diseases</h6>
+                <h6 class="diseases-panel-title small fw-bold text-uppercase letter-spacing-1 mb-4">Top 3 Leading Cases</h6>
                 <div class="flex-grow-1 overflow-auto pe-1">
                   <div v-for="(disease, idx) in top3Diseases" :key="disease.code" class="mb-3 glass-item premium-shadow-sm">
                     <div class="d-flex align-items-center gap-3">
