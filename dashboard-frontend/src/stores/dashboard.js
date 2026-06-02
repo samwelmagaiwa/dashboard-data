@@ -304,13 +304,11 @@ export const useDashboardStore = defineStore('dashboard', () => {
   }
 
   const startOfflineCountdown = () => {
-    // If already running, don't restart it (prevents jitter/resets)
-    if (offlineCountdownInterval) return
+    if (offlineCountdownInterval) clearInterval(offlineCountdownInterval)
     
     // Only set start time if not already in an offline session
     if (!offlineStartTime.value) {
       offlineStartTime.value = Date.now()
-      console.log('[DashboardStore] Starting new offline tracking session at:', new Date(offlineStartTime.value).toLocaleTimeString())
     }
     
     offlineCountdownInterval = setInterval(() => {
