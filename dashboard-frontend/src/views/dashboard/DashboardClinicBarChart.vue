@@ -238,16 +238,26 @@ const chartOptions = computed(() => {
           label: (ctx) => {
             const clinic = clinics[ctx.dataIndex]
             if (!clinic) return ''
+            const isCurrent = ctx.datasetIndex === 0
             const val = Math.abs(ctx.raw)
             return `  ${ctx.dataset.label}: ${val.toLocaleString()}`
           },
           afterLabel: (ctx) => {
             const clinic = clinics[ctx.dataIndex]
-            if (ctx.datasetIndex === 0 && clinic) {
+            if (!clinic) return ''
+            const lines = []
+            
+            if (ctx.datasetIndex === 0) {
+              const pendingLabel = dashboard.isTodaySelected ? 'Await Consultation' : 'Not Consulted'
+              lines.push(`  Consulted: ${clinic.consulted || 0}`)
+              lines.push(`  ${pendingLabel}: ${clinic.pending || 0}`)
+              
               const sign = (clinic.trend || 0) > 0 ? '+' : ''
-              return `  Change: ${sign}${clinic.trend}% (${clinic.interpretation})`
+              lines.push(`  Change: ${sign}${clinic.trend}% (${clinic.interpretation})`)
+            } else {
+              lines.push(`  Not Consulted: ${clinic.previous_pending || 0}`)
             }
-            return ''
+            return lines
           },
         },
       },
@@ -338,6 +348,55 @@ const barLabelsPlugin = {
         ctx.textAlign = 'center'
         ctx.textBaseline = isPositive ? 'bottom' : 'top'
         ctx.fillText(absoluteVal.toLocaleString(), x, isPositive ? y - 8 : y + 8)
+
+        // ── Sub-metrics (Consulted / Await) ────────────────
+        ctx.save()
+        const isToday = dashboard.isTodaySelected
+        const consulted = clinic.consulted
+        const pending = clinic.pending
+        const prevPending = clinic.previous_pending
+
+        ctx.font = "bold 14px 'Outfit', sans-serif"
+        
+        if (isCurrent) {
+          // Current Bar (Up)
+          const consultedVal = consulted !== undefined ? consulted : 0
+          const pendingVal = pending !== undefined ? pending : 0
+          
+          if (consultedVal > 0 || pendingVal > 0) {
+            const subY = y - 32
+            
+            // Draw Consulted (Green with Up Arrow)
+            ctx.fillStyle = '#16a34a'
+            ctx.textAlign = 'right'
+            ctx.fillText(`${consultedVal.toLocaleString()} ↑`, x - 5, subY)
+            
+            // Draw Await Consultation (Pink with Down Arrow)
+            ctx.fillStyle = '#ec4899'
+            ctx.textAlign = 'left'
+            ctx.fillText(`↓ ${pendingVal.toLocaleString()}`, x + 5, subY)
+          }
+        } else {
+          // Previous Bar (Down)
+          const prevConsulted = clinic.previous_consulted !== undefined ? clinic.previous_consulted : 0
+          const prevPending = clinic.previous_pending !== undefined ? clinic.previous_pending : 0
+          
+          if (prevConsulted > 0 || prevPending > 0) {
+            const subY = y + 32
+            ctx.textBaseline = 'top'
+            
+            // Draw Previous Consulted (Green with Up Arrow)
+            ctx.fillStyle = '#16a34a'
+            ctx.textAlign = 'right'
+            ctx.fillText(`${prevConsulted.toLocaleString()} ↑`, x - 5, subY)
+            
+            // Draw Previous Not Consulted (Pink with Down Arrow)
+            ctx.fillStyle = '#ec4899'
+            ctx.textAlign = 'left'
+            ctx.fillText(`↓ ${prevPending.toLocaleString()}`, x + 5, subY)
+          }
+        }
+        ctx.restore()
 
         if (isCurrent && clinic.trend !== undefined) {
           const trend = clinic.trend
@@ -477,27 +536,43 @@ const barLabelsPlugin = {
       </h5>
 
       <!-- Legend Pill -->
-      <div class="chart-legend-overlay d-flex gap-3 align-items-center">
+      <div class="chart-legend-overlay d-flex gap-2 align-items-center">
         <div class="legend-badge current-visits d-flex align-items-center gap-2">
-          <span class="badge-icon">▲</span>
-          <span class="badge-text text-nowrap">Current Visits (Up)</span>
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge-icon">▲</span>
+            <span class="badge-text text-nowrap">Current Visits (Up)</span>
+          </div>
+          <div class="d-flex align-items-center gap-2 ps-2 border-start border-slate-200">
+             <span class="fw-black" style="color: #16a34a; font-size: 16px">↑</span>
+             <small class="fw-bold" style="color: #16a34a; font-size: 10px; letter-spacing: 0.5px">CONSULTED</small>
+             <span class="fw-black ms-1" style="color: #ec4899; font-size: 16px">↓</span>
+             <small class="fw-bold" style="color: #ec4899; font-size: 10px; letter-spacing: 0.5px">AWAIT</small>
+          </div>
         </div>
         <div class="legend-divider"></div>
         <div class="legend-badge previous-visits d-flex align-items-center gap-2">
-          <span class="badge-icon">▼</span>
-          <span class="badge-text text-nowrap">
-            Previous Visits (Down)
-            <small
-              v-if="sortedClinics[0]?.comparison_dates"
-              class="comparison-tag ms-1 text-secondary opacity-75"
-            >
-              {{
-                sortedClinics[0].comparison_dates.toLowerCase().includes('vs')
-                  ? sortedClinics[0].comparison_dates
-                  : '(vs ' + sortedClinics[0].comparison_dates + ')'
-              }}
-            </small>
-          </span>
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge-icon">▼</span>
+            <span class="badge-text text-nowrap">
+              Previous Visits (Down)
+              <small
+                v-if="sortedClinics[0]?.comparison_dates"
+                class="comparison-tag ms-1 text-secondary opacity-75"
+              >
+                {{
+                  sortedClinics[0].comparison_dates.toLowerCase().includes('vs')
+                    ? sortedClinics[0].comparison_dates
+                    : '(vs ' + sortedClinics[0].comparison_dates + ')'
+                }}
+              </small>
+            </span>
+          </div>
+          <div class="d-flex align-items-center gap-2 ps-2 border-start border-slate-200">
+             <span class="fw-black" style="color: #16a34a; font-size: 16px">↑</span>
+             <small class="fw-bold" style="color: #16a34a; font-size: 10px; letter-spacing: 0.5px">CONSULTED</small>
+             <span class="fw-black ms-1" style="color: #ec4899; font-size: 16px">↓</span>
+             <small class="fw-bold" style="color: #ec4899; font-size: 10px; letter-spacing: 0.5px">NOT CONS.</small>
+          </div>
         </div>
 
         <div v-if="sortedClinics.length > 10" class="legend-divider"></div>

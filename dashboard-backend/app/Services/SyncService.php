@@ -21,7 +21,7 @@ class SyncService
 {
     private function getCacheVersion(): int
     {
-        return config('dashboard.cache_version', 7);
+        return config('dashboard.cache_version', 10);
     }
 
     protected static $cachedClinics = [];
@@ -429,7 +429,13 @@ class SyncService
 
         $clinicData = Visit::where('visit_date', $date)
             ->groupBy('clinic_code', 'clinic_name')
-            ->select('clinic_code', 'clinic_name', DB::raw('COUNT(*) as total_visits'))
+            ->select(
+                'clinic_code', 
+                'clinic_name', 
+                DB::raw('COUNT(*) as total_visits'),
+                DB::raw('SUM(CASE WHEN visit_status = "C" THEN 1 ELSE 0 END) as consulted'),
+                DB::raw('SUM(CASE WHEN (visit_status IS NULL OR visit_status != "C") THEN 1 ELSE 0 END) as pending')
+            )
             ->get();
 
         if ($clinicData->isNotEmpty()) {
@@ -438,11 +444,13 @@ class SyncService
                     'stat_date' => $date,
                     'clinic_code' => $item->clinic_code,
                     'clinic_name' => $item->clinic_name ?: 'Unknown Clinic',
-                    'total_visits' => (int)$item->total_visits
+                    'total_visits' => (int)$item->total_visits,
+                    'consulted' => (int)$item->consulted,
+                    'pending' => (int)$item->pending
                 ];
             })->toArray();
 
-            ClinicStat::upsert($clinicBatch, ['stat_date', 'clinic_code'], ['clinic_name', 'total_visits']);
+            ClinicStat::upsert($clinicBatch, ['stat_date', 'clinic_code'], ['clinic_name', 'total_visits', 'consulted', 'pending']);
         }
 
         // 3. Pre-aggregate Referral Stats

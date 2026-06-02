@@ -13,6 +13,9 @@ const dashboard = useDashboardStore()
 // Ref for chart scroll container
 const chartScrollRef = ref(null)
 
+// Breakdown toggle state
+const breakdownEnabled = ref(false)
+
 // Auto-scroll to show "Today" data on mount and when data changes
 const scrollToToday = () => {
   // Try multiple times with increasing delays to ensure DOM is ready
@@ -104,8 +107,8 @@ const rawTrendData = computed(() => dashboard.serviceTrendData || { labels: [], 
 const normalizedTrendData = computed(() => {
   const rawData = rawTrendData.value
 
-  if (!rawData?.datasets?.length || !rawData?.labels?.length) {
-    return rawData
+  if (!rawData || !rawData.datasets?.length || !rawData.labels?.length) {
+    return rawData || { labels: [], datasets: [] }
   }
 
   const period = dashboard.selectedPeriod
@@ -208,9 +211,6 @@ const normalizedTrendData = computed(() => {
     })),
   }
 })
-
-// Breakdown toggle state
-const breakdownEnabled = ref(false)
 
 // Watch for data changes and scroll to today
 watch([() => normalizedTrendData.value, () => dashboard.selectedPeriod, () => breakdownEnabled.value], () => {
@@ -326,7 +326,7 @@ const barLabelsPlugin = {
 
 const chartData = computed(() => {
   const rawData = normalizedTrendData.value
-  if (!rawData.datasets) return rawData
+  if (!rawData?.datasets) return rawData || { labels: [], datasets: [] }
 
   let barPercentage = 0.95
   let categoryPercentage = 0.8
@@ -519,6 +519,10 @@ const chartOptions = computed(() => {
           </h5>
         </div>
         <div class="d-flex align-items-center gap-3">
+          <div v-if="dashboard.remoteApiAvailable === false && dashboard.isOfflineUIReported" class="d-flex align-items-center gap-2 px-3 py-1 bg-amber-50 border border-amber-200 rounded-pill shadow-sm">
+            <div class="spinner-grow spinner-grow-sm text-amber-500" role="status" style="width: 8px; height: 8px;"></div>
+            <span class="fw-bold text-amber-700" style="font-size: 11px; letter-spacing: 0.5px">RECONNECTING... (CACHED)</span>
+          </div>
           <div
             class="premium-stat-pill d-flex align-items-center shadow-sm border-primary-subtle bg-white"
             style="scale: 0.9; margin: -5px 0"
@@ -628,7 +632,7 @@ const chartOptions = computed(() => {
                 }"
               >
                 <CChartBar
-                  :key="breakdownEnabled ? 'breakdown' : 'default'"
+                  :key="`${breakdownEnabled ? 'breakdown' : 'default'}-${dashboard.remoteApiAvailable}`"
                   :data="chartData"
                   :options="{
                     ...chartOptions,

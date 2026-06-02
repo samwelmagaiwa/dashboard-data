@@ -33,8 +33,15 @@ const gapsModalVisible = ref(false)
 const forceGapRepair = ref(false)
 const dashboard = useDashboardStore()
 const { colorMode, setColorMode } = useColorModes('coreui-free-vue-admin-template-theme')
-const isRemoteOffline = computed(() => dashboard.remoteApiAvailable === false)
+const isRemoteOffline = computed(() => dashboard.remoteApiAvailable === false && dashboard.isOfflineUIReported)
 const remoteStatusLabel = computed(() => (isRemoteOffline.value ? 'OFFLINE' : 'ONLINE'))
+const formatOfflineTimer = computed(() => {
+  const seconds = dashboard.offlineTimerCountdown || 0
+  if (seconds <= 0) return ''
+  const minutes = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${minutes}:${String(secs).padStart(2, '0')}`
+})
 
 const headerClassNames = ref('mb-4 p-0')
 const modalVisible = ref(false)
@@ -212,7 +219,10 @@ onMounted(() => {
           :class="isRemoteOffline ? 'status-offline' : 'status-online'"
         >
           <span class="status-orb"></span>
-          <span class="status-label">{{ remoteStatusLabel }}</span>
+          <div class="status-content">
+            <span class="status-label">{{ isRemoteOffline ? 'OFFLINE' : 'ONLINE' }}</span>
+            <span v-if="isRemoteOffline" class="status-timer">{{ formatOfflineTimer }}</span>
+          </div>
         </div>
 
         <CDropdown variant="nav-item" placement="bottom-end" class="me-3">
@@ -427,10 +437,7 @@ onMounted(() => {
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
-  width: 122px;
-  min-width: 122px;
-  max-width: 122px;
-  padding: 3px 10px 3px 3px;
+  padding: 3px 14px 3px 3px;
   border-radius: 999px;
   border: 3px solid #bfc4ca;
   background: linear-gradient(180deg, #fafafa 0%, #d9dde2 52%, #f8fafc 100%);
@@ -443,9 +450,18 @@ onMounted(() => {
     border-color 0.3s ease,
     box-shadow 0.3s ease,
     transform 0.3s ease;
-  flex: 0 0 122px;
-  overflow: hidden;
+  overflow: visible;
   isolation: isolate;
+  white-space: nowrap;
+}
+
+.status-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+  justify-content: center;
+  height: 100%;
 }
 
 .status-orb {
@@ -462,12 +478,23 @@ onMounted(() => {
 }
 
 .status-label {
-  font-size: 0.66rem;
+  font-size: 0.75rem;
   font-weight: 900;
   letter-spacing: 0.05em;
-  line-height: 1;
+  line-height: 1.1;
   color: #fff;
   text-shadow: 0 2px 5px rgba(0, 0, 0, 0.16);
+  white-space: nowrap;
+}
+
+.status-timer {
+  font-size: 0.75rem;
+  font-weight: 900;
+  font-family: 'Monaco', 'Courier New', monospace;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  color: #ffffff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   white-space: nowrap;
 }
 
@@ -525,7 +552,8 @@ onMounted(() => {
 }
 
 .status-orb,
-.status-label {
+.status-label,
+.status-timer {
   position: relative;
   z-index: 1;
 }

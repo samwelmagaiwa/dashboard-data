@@ -18,6 +18,18 @@ const dashboard = useDashboardStore()
 const router = useRouter()
 const hiddenDiseaseDepartments = ref([])
 
+const showOfflineIndicator = computed(
+  () => dashboard.remoteApiAvailable === false && dashboard.isUsingCachedData
+)
+
+const formatOfflineCountdown = computed(() => {
+  const seconds = dashboard.offlineTimerCountdown || 0
+  if (seconds <= 0) return ''
+  const minutes = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${minutes}:${String(secs).padStart(2, '0')}`
+})
+
 const diseaseDepartmentColors = {
   'MLG-INTERNAL MEDICINE DEPARTMENT': '#3b82f6',
   'MLG-REHABILITATION MEDICINE DEPARTMENT': '#10b981',

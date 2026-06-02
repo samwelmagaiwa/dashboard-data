@@ -16,6 +16,8 @@ class ClinicStat extends Model
         'clinic_code',
         'clinic_name',
         'total_visits',
+        'consulted',
+        'pending',
     ];
 
     /**

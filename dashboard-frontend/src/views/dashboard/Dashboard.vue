@@ -15,6 +15,10 @@ import {
   cilChevronTop,
   cilSearch,
 } from '@coreui/icons'
+
+const dashboard = useDashboardStore()
+const autoScroll = getAutoScrollState()
+
 import { ChartLine, ChartBar } from '../charts/index.js'
 import { CChart, CChartPie } from '@coreui/vue-chartjs'
 import VueDatePicker from '@vuepic/vue-datepicker'
@@ -28,11 +32,37 @@ import ServiceTrendChart from './ServiceTrendChart.vue'
 
 const MainChart = defineAsyncComponent(() => import('./MainChart.vue'))
 
-const dashboard = useDashboardStore()
-const autoScroll = getAutoScrollState()
 const isAutoScrollEnabled = computed(() => autoScroll.isEnabled.value)
 const hiddenPieCategories = ref([]) // Track hidden categories for pie chart
-const showOutageSlideshow = computed(() => dashboard.remoteApiAvailable === false)
+// Show outage slideshow ONLY when API is unreachable AND grace period has completely expired
+const showOutageSlideshow = computed(
+  () => {
+    // If API is available, definitely NO slideshow
+    if (dashboard.remoteApiAvailable !== false) return false
+
+    // If we are in the 5-minute silent window, do NOT show slideshow
+    if (dashboard.remoteApiAvailable === false && !dashboard.isOfflineUIReported) return false
+    
+    // If we are currently using cached fallback data, do NOT show slideshow
+    if (dashboard.isUsingCachedData) return false
+    
+    // If there is any active countdown at all, stay on the dashboard
+    if (dashboard.offlineTimerCountdown !== null) return false
+    
+    // Final check: Only show slideshow if we are truly offline, 5m delay has passed, and 15m grace has expired
+    return dashboard.remoteApiAvailable === false && !dashboard.isUsingCachedData && dashboard.offlineTimerCountdown === null
+  }
+)
+const showOfflineIndicator = computed(
+  () => dashboard.remoteApiAvailable === false && dashboard.isUsingCachedData && dashboard.isOfflineUIReported
+)
+const formatOfflineCountdown = computed(() => {
+  const seconds = dashboard.offlineTimerCountdown || 0
+  if (seconds <= 0) return ''
+  const minutes = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${minutes}:${String(secs).padStart(2, '0')}`
+})
 const outageSlides = ['/outage-slides/slide-1.jpg', '/outage-slides/slide-2.jpg', '/outage-slides/slide-3.jpg']
 const activeOutageSlide = ref(0)
 
@@ -729,4 +759,6 @@ const formatDate = (dateStr) => {
     min-height: 60vh;
   }
 }
+
+
 </style>

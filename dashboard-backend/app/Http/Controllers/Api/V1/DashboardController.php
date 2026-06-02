@@ -20,7 +20,9 @@ class DashboardController extends Controller
 {
     private function getRemoteApiAvailability(): bool
     {
-        return Cache::remember('dashboard_remote_api_health_v1', 20, function () {
+        // Cache for only 3 seconds for faster detection of remote API failures
+        // When API goes down, frontend should detect within ~3 seconds instead of up to 20 seconds
+        return Cache::remember('dashboard_remote_api_health_v1', 3, function () {
             try {
                 $username = config('dashboard.sync.username', env('DASHBOARD_API_USERNAME'));
                 $password = config('dashboard.sync.password', env('DASHBOARD_API_PASSWORD'));
@@ -67,7 +69,7 @@ class DashboardController extends Controller
      */
     private function getCacheVersion(): int
     {
-        return config('dashboard.cache_version', 9);
+        return config('dashboard.cache_version', 10);
     }
 
     protected $syncService;
@@ -319,23 +321,25 @@ class DashboardController extends Controller
 
             $current = ClinicStat::where('stat_date', '>=', $startDate)
                 ->where('stat_date', '<=', $endDate)
-                ->selectRaw('clinic_name, SUM(total_visits) as total_visits')
+                ->selectRaw('clinic_name, SUM(total_visits) as total_visits, SUM(consulted) as consulted, SUM(pending) as pending')
                 ->groupBy('clinic_name')
                 ->orderByDesc('total_visits')
                 ->get();
 
-            $prevCounts = ClinicStat::where('stat_date', '>=', $comparison['start']->toDateString())
+            $prev = ClinicStat::where('stat_date', '>=', $comparison['start']->toDateString())
                 ->where('stat_date', '<=', $comparison['end']->toDateString())
-                ->selectRaw('clinic_name, SUM(total_visits) as total_visits')
+                ->selectRaw('clinic_name, SUM(total_visits) as total_visits, SUM(consulted) as consulted, SUM(pending) as pending')
                 ->groupBy('clinic_name')
-                ->pluck('total_visits', 'clinic_name')
-                ->toArray();
+                ->get();
 
-            $prevCountsMapped = [];
-            foreach ($prevCounts as $name => $val) {
-                // Normalize internal spaces and trim
-                $normalized = preg_replace('/\s+/', ' ', trim($name));
-                $prevCountsMapped[$normalized] = (int)$val;
+            $prevMap = [];
+            foreach ($prev as $row) {
+                $normalized = preg_replace('/\s+/', ' ', trim($row->clinic_name));
+                $prevMap[$normalized] = [
+                    'total_visits' => (int)$row->total_visits,
+                    'consulted' => (int)$row->consulted,
+                    'pending' => (int)$row->pending
+                ];
             }
 
             $breakdown = [];
@@ -343,23 +347,29 @@ class DashboardController extends Controller
                 $rawName = $row->clinic_name;
                 $normalizedName = preg_replace('/\s+/', ' ', trim($rawName));
                 
-                $cur = (int) ($row->total_visits ?? 0);
-                $prev = (int) ($prevCountsMapped[$normalizedName] ?? 0);
+                $curTot = (int) ($row->total_visits ?? 0);
+                $curCons = (int) ($row->consulted ?? 0);
+                $curPend = (int) ($row->pending ?? 0);
+                
+                $pData = $prevMap[$normalizedName] ?? ['total_visits' => 0, 'consulted' => 0, 'pending' => 0];
+                $prevTot = $pData['total_visits'];
+                $prevCons = $pData['consulted'];
+                $prevPend = $pData['pending'];
 
                 $trend = 0.0;
-                if ($prev > 0) {
-                    $trend = (($cur - $prev) / $prev) * 100;
+                if ($prevTot > 0) {
+                    $trend = (($curTot - $prevTot) / $prevTot) * 100;
                     $trend = round($trend, 1);
-                } elseif ($cur > 0) {
+                } elseif ($curTot > 0) {
                     $trend = 100.0;
                 }
 
-                // Cap trend at +/- 100% to avoid unrealistic percentages in chart
+                // Cap trend at +/- 100%
                 if ($trend > 100) $trend = 100.0;
                 if ($trend < -100) $trend = -100.0;
 
                 $interpretation = 'Stable';
-                if ($cur === 0) {
+                if ($curTot === 0) {
                     $interpretation = 'No Visits';
                 } elseif ($trend > 0) {
                     $interpretation = 'Increasing';
@@ -369,8 +379,12 @@ class DashboardController extends Controller
 
                 $breakdown[] = [
                     'clinic_name' => $rawName,
-                    'total_visits' => $cur,
-                    'previous_visits' => $prev,
+                    'total_visits' => $curTot,
+                    'consulted' => $curCons,
+                    'pending' => $curPend,
+                    'previous_visits' => $prevTot,
+                    'previous_consulted' => $prevCons,
+                    'previous_pending' => $prevPend,
                     'trend' => $trend,
                     'interpretation' => $interpretation,
                     'comparison_dates' => $compLabel,

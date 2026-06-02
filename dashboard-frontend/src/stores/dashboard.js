@@ -73,6 +73,16 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const syncMessage = ref('')
   const dismissedBatchId = ref(null)
   const isInitialized = ref(false) // Track if first load is complete
+  
+  // Offline resilience state
+  const offlineTimerCountdown = ref(null) // Remaining seconds, null when not offline or expired
+  const isUsingCachedData = ref(false) // True when showing cached data due to offline
+  const offlineStartTime = ref(null) // When did API become unavailable
+  const OFFLINE_GRACE_PERIOD_MS = 15 * 60 * 1000 // Total 15 minutes in milliseconds
+  const OFFLINE_REPORT_DELAY_MS = 5 * 60 * 1000 // 5 minutes silent delay before UI shows 'OFFLINE'
+  const isOfflineUIReported = ref(false) // Whether we should actually show the offline badge/timer
+  let offlineCountdownInterval = null
+  
   let pulseTimer = null
   let initialLoadComplete = false
   let lastSilentRefresh = 0
@@ -99,7 +109,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
       const hasTodayCountChange = todayCount.value > 0 && newTodayCount !== todayCount.value
       const hasTotalCountChange = totalCount.value > 0 && newTotalCount !== totalCount.value
 
-      if (hasVersionChange || hasNewVisit || hasTodayCountChange || hasTotalCountChange) {
+      const wentOffline = previousRemoteApiAvailability !== false && remoteApiAvailable.value === false
+
+      if (hasVersionChange || hasNewVisit || hasTodayCountChange || hasTotalCountChange || wentOffline) {
         consecutiveNoChanges.value = 0
         pollInterval.value = 5000
         lastUpdated.value = new Date()
@@ -138,6 +150,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
       totalCount.value = newTotalCount
 
       if (previousRemoteApiAvailability === false && remoteApiAvailable.value === true) {
+        console.log('[DashboardStore] API is back online, clearing offline state')
+        stopOfflineCountdown()
         const now = Date.now()
         if (!activeBatchId.value && now - lastSilentRefresh > SILENT_REFRESH_COOLDOWN) {
           lastSilentRefresh = now
@@ -145,6 +159,18 @@ export const useDashboardStore = defineStore('dashboard', () => {
         }
       }
     } catch (e) {
+      if (remoteApiAvailable.value !== false) {
+        console.warn('[DashboardStore] API connection lost. Entering 5-minute silent window.')
+        remoteApiAvailable.value = false
+        // Immediately start countdown to track the 5-minute window
+        startOfflineCountdown()
+        
+        // Use cached data immediately if available to prevent blank screens
+        if (realStats.value) {
+          isUsingCachedData.value = true
+        }
+        fetchStats(true)
+      }
       pollInterval.value = Math.min(pollInterval.value + 2000, 30000)
     }
   }
@@ -163,6 +189,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
       clearTimeout(pulseTimer)
       pulseTimer = null
     }
+    stopOfflineCountdown()
   }
 
   const api = axios.create({
@@ -198,6 +225,130 @@ export const useDashboardStore = defineStore('dashboard', () => {
     } catch (e) {
       return null
     }
+  }
+
+  // Offline resilience cache functions
+  const generateCacheKey = (startDate, endDate) => {
+    return `mnh_dashboard_cache_${startDate}_${endDate}`
+  }
+
+  const saveDataToCache = (startDate, endDate, data) => {
+    try {
+      const cacheKey = generateCacheKey(startDate, endDate)
+      const cacheData = {
+        timestamp: Date.now(),
+        startDate,
+        endDate,
+        stats: data.stats,
+        previousStats: data.previousStats,
+        clinics: data.clinics,
+        pie: data.pie,
+        comparison: data.comparison,
+        referrals: data.referrals,
+        trends: data.trends,
+        compLabel: data.compLabel,
+        remoteApiAvailable: data.remoteApiAvailable,
+      }
+      localStorage.setItem(cacheKey, JSON.stringify(cacheData))
+      console.log('[DashboardStore] Data cached for', startDate, '-', endDate)
+    } catch (e) {
+      console.error('[DashboardStore] Error saving to cache:', e)
+    }
+  }
+
+  const getCachedData = (startDate, endDate) => {
+    try {
+      const cacheKey = generateCacheKey(startDate, endDate)
+      const cached = localStorage.getItem(cacheKey)
+      if (!cached) {
+        // Fallback: If exact range not found, look for ANY cached dashboard data
+        console.log('[DashboardStore] Exact cache not found, searching for any cached data...')
+        const anyCachedData = findAnyCachedData()
+        if (anyCachedData) {
+          console.log('[DashboardStore] Found fallback cached data from different date range')
+          return anyCachedData
+        }
+        return null
+      }
+      const data = JSON.parse(cached)
+      const age = Date.now() - data.timestamp
+      console.log('[DashboardStore] Found cached data for', startDate, '-', endDate, 'age:', age)
+      return data
+    } catch (e) {
+      console.error('[DashboardStore] Error reading from cache:', e)
+      return null
+    }
+  }
+
+  const findAnyCachedData = () => {
+    try {
+      const dashboardPrefix = 'dashboard_cache_'
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)
+        if (key && key.startsWith(dashboardPrefix)) {
+          const cached = localStorage.getItem(key)
+          if (cached) {
+            const data = JSON.parse(cached)
+            // Only return if it has essential data
+            if (data.stats && data.clinics) {
+              return data
+            }
+          }
+        }
+      }
+      return null
+    } catch (e) {
+      console.error('[DashboardStore] Error searching cache:', e)
+      return null
+    }
+  }
+
+  const startOfflineCountdown = () => {
+    // If already running, don't restart it (prevents jitter/resets)
+    if (offlineCountdownInterval) return
+    
+    // Only set start time if not already in an offline session
+    if (!offlineStartTime.value) {
+      offlineStartTime.value = Date.now()
+      console.log('[DashboardStore] Starting new offline tracking session at:', new Date(offlineStartTime.value).toLocaleTimeString())
+    }
+    
+    offlineCountdownInterval = setInterval(() => {
+      if (!offlineStartTime.value) {
+        if (offlineCountdownInterval) clearInterval(offlineCountdownInterval)
+        return
+      }
+
+      const elapsed = Date.now() - offlineStartTime.value
+      const remaining = Math.max(0, OFFLINE_GRACE_PERIOD_MS - elapsed)
+      const seconds = Math.ceil(remaining / 1000)
+
+      // Only report offline to UI (badge/timer) after the 5-minute silent delay
+      if (elapsed >= OFFLINE_REPORT_DELAY_MS) {
+        isOfflineUIReported.value = true
+      } else {
+        isOfflineUIReported.value = false
+      }
+
+      if (remaining <= 0) {
+        offlineTimerCountdown.value = null
+        isUsingCachedData.value = false
+        isOfflineUIReported.value = false
+        offlineStartTime.value = null
+        if (offlineCountdownInterval) clearInterval(offlineCountdownInterval)
+        console.log('[DashboardStore] Offline grace period expired')
+      } else {
+        offlineTimerCountdown.value = seconds
+      }
+    }, 1000)
+  }
+
+  const stopOfflineCountdown = () => {
+    if (offlineCountdownInterval) clearInterval(offlineCountdownInterval)
+    offlineTimerCountdown.value = null
+    isUsingCachedData.value = false
+    isOfflineUIReported.value = false
+    offlineStartTime.value = null
   }
 
   const calculateDateRange = () => {
@@ -329,6 +480,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
         compStats.value = null
         referralStats.value = null
         serviceTrendData.value = null
+        stopOfflineCountdown()
         return
       }
 
@@ -351,10 +503,53 @@ export const useDashboardStore = defineStore('dashboard', () => {
           `/dashboard/snapshot?start_date=${start_date}&end_date=${end_date}&period=${period}${breakdownParam}${freshParam}&_t=${timestamp}`,
         )
 
+        // Check if remote API is available
+        const isRemoteApiAvailable = data?.stats?.meta?.remote_api_available !== false
+        
         if (typeof data?.stats?.meta?.remote_api_available === 'boolean') {
           remoteApiAvailable.value = data.stats.meta.remote_api_available
         }
 
+        // If remote API is down, use cache instead of showing stale backend data
+        if (!isRemoteApiAvailable) {
+          console.log('[DashboardStore] Remote API unavailable, attempting to restore from cache')
+          const cachedData = getCachedData(start_date, end_date)
+          
+          if (cachedData) {
+            console.log('[DashboardStore] Cache found, restoring cached data')
+            realStats.value = cachedData.stats
+            previousStats.value = cachedData.previousStats
+            compLabel.value = cachedData.compLabel
+            realClinics.value = cachedData.clinics
+            pieStats.value = cachedData.pie
+            compStats.value = cachedData.comparison
+            referralStats.value = cachedData.referrals
+            serviceTrendData.value = cachedData.trends || { labels: [], datasets: [] }
+            
+            // Mark that we're using cached data and start countdown
+            isUsingCachedData.value = true
+            startOfflineCountdown()
+            trendStatus.value = 'cached'
+            
+            lastUpdated.value = new Date().toLocaleTimeString()
+            if (!isInitialized.value) {
+              isInitialized.value = true
+            }
+            if (!initialLoadComplete) {
+              initialLoadComplete = true
+              setTimeout(() => startPulse(), 2000)
+            }
+            return
+          } else {
+            console.log('[DashboardStore] No cache available, showing empty state')
+            trendStatus.value = 'error'
+            isUsingCachedData.value = false
+            stopOfflineCountdown()
+            return
+          }
+        }
+
+        // API is available, update with fresh data
         realStats.value = data.stats.stats
         previousStats.value = data.stats.previous_stats
         compLabel.value = data.stats.compLabel
@@ -364,7 +559,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
         if (!isBackgroundSyncRefresh) {
           fetchGenderRadarStats(silent)
           fetchDetailedClinics(silent)
-        } else if (detailedClinics.value.length === 0 || (data.stats.stats?.total_detailed || 0) > 0) {
+        } else if ((detailedClinics.value?.length || 0) === 0 || (data.stats.stats?.total_detailed || 0) > 0) {
           fetchDetailedClinics(true, { background: true })
         }
         compStats.value = data.comparison
@@ -391,6 +586,22 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
         lastUpdated.value = new Date().toLocaleTimeString()
 
+        // Save fetched data to cache for offline resilience
+        saveDataToCache(start_date, end_date, {
+          stats: data.stats.stats,
+          previousStats: data.stats.previous_stats,
+          clinics: data.clinics,
+          pie: data.pie,
+          comparison: data.comparison,
+          referrals: data.referrals,
+          trends: data.trends,
+          compLabel: data.stats.compLabel,
+          remoteApiAvailable: remoteApiAvailable.value,
+        })
+
+        // Clear offline state on successful fetch
+        stopOfflineCountdown()
+
         // Mark as initialized after first successful fetch
         if (!isInitialized.value) {
           isInitialized.value = true
@@ -403,7 +614,51 @@ export const useDashboardStore = defineStore('dashboard', () => {
       }
     } catch (error) {
       console.error('[DashboardStore] Error fetching snapshot:', error)
-      trendStatus.value = 'error'
+      
+      // Mark API as unavailable on network errors
+      if (error.response?.status >= 500 || !error.response) {
+        const wasAvailable = remoteApiAvailable.value !== false
+        remoteApiAvailable.value = false
+        
+        // If we have data in memory, enter grace period immediately to avoid UI flicker
+        if (wasAvailable && realStats.value) {
+          isUsingCachedData.value = true
+          startOfflineCountdown()
+        }
+      }
+      
+      // Offline resilience: Try to restore from cache on API failure
+      const { start_date, end_date } = calculateDateRange()
+      const cachedData = getCachedData(start_date, end_date)
+
+      if (cachedData) {
+        console.log('[DashboardStore] Restoring data from cache due to API failure')
+        // Restore all cached data
+        realStats.value = cachedData.stats
+        previousStats.value = cachedData.previousStats
+        compLabel.value = cachedData.compLabel
+        realClinics.value = cachedData.clinics
+        pieStats.value = cachedData.pie
+        compStats.value = cachedData.comparison
+        referralStats.value = cachedData.referrals
+        serviceTrendData.value = cachedData.trends || { labels: [], datasets: [] }
+        
+        // Mark that we're using cached data and start countdown
+        isUsingCachedData.value = true
+        startOfflineCountdown()
+        trendStatus.value = 'cached'
+      } else if (realStats.value) {
+        // Even if disk cache failed, if we have data in memory, STAY in grace period
+        console.log('[DashboardStore] API failed, but keeping in-memory data active')
+        isUsingCachedData.value = true
+        startOfflineCountdown()
+        trendStatus.value = 'cached'
+      } else {
+        // Truly no data anywhere
+        trendStatus.value = 'error'
+        isUsingCachedData.value = false
+        stopOfflineCountdown()
+      }
     } finally {
       if (!silent) isLoading.value = false
       isTrendsLoading.value = false
@@ -1004,5 +1259,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
     isUpToDate,
     remoteApiAvailable,
     isTodaySelected,
+    offlineTimerCountdown,
+    isUsingCachedData,
+    isOfflineUIReported,
   }
 })

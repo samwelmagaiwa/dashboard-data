@@ -156,6 +156,60 @@ watch(
         </div>
       </CCol>
 
+      <!-- New Visits -->
+      <CCol class="metric-col">
+        <div
+          class="stat-card premium-shadow shadow-cyan"
+          style="border-left: 4px solid #06b6d4; border-top: 1px solid #06b6d4"
+        >
+          <div class="stat-card-header mb-1">
+            <div class="stat-icon-wrapper" style="background-color: rgba(6, 182, 212, 0.15)">
+              <CIcon :icon="cilClock" class="stat-icon" style="color: #06b6d4" />
+            </div>
+            <div class="stat-main-info">
+              <h3 class="stat-value" style="color: #06b6d4">{{ getValue('new_visits') }}</h3>
+              <span class="stat-label">New Visits</span>
+            </div>
+          </div>
+          <div
+            v-if="dashboard.compLabel"
+            class="stat-card-footer mt-auto pt-1"
+          >
+            <div class="stat-comparison">
+              <span class="prev-value text-muted">{{ getPrevValue('new_visits') }}</span>
+              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
+            </div>
+          </div>
+        </div>
+      </CCol>
+
+      <!-- Followups -->
+      <CCol class="metric-col">
+        <div
+          class="stat-card premium-shadow shadow-purple"
+          style="border-left: 4px solid #6610f2; border-top: 1px solid #6610f2"
+        >
+          <div class="stat-card-header mb-1">
+            <div class="stat-icon-wrapper" style="background-color: rgba(102, 16, 242, 0.15)">
+              <CIcon :icon="cilUser" class="stat-icon" style="color: #6610f2" />
+            </div>
+            <div class="stat-main-info">
+              <h3 class="stat-value" style="color: #6610f2">{{ getValue('followups') }}</h3>
+              <span class="stat-label">Follow-ups</span>
+            </div>
+          </div>
+          <div
+            v-if="dashboard.compLabel"
+            class="stat-card-footer mt-auto pt-1"
+          >
+            <div class="stat-comparison">
+              <span class="prev-value text-muted">{{ getPrevValue('followups') }}</span>
+              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
+            </div>
+          </div>
+        </div>
+      </CCol>
+
       <!-- Total Consulted -->
       <CCol class="metric-col">
         <div
@@ -292,60 +346,6 @@ watch(
                   patient.cons_time ? patient.cons_time.substring(0, 5) : ''
                 }}</span>
               </div>
-            </div>
-          </div>
-        </div>
-      </CCol>
-
-      <!-- New Visits -->
-      <CCol class="metric-col">
-        <div
-          class="stat-card premium-shadow shadow-cyan"
-          style="border-left: 4px solid #06b6d4; border-top: 1px solid #06b6d4"
-        >
-          <div class="stat-card-header mb-1">
-            <div class="stat-icon-wrapper" style="background-color: rgba(6, 182, 212, 0.15)">
-              <CIcon :icon="cilClock" class="stat-icon" style="color: #06b6d4" />
-            </div>
-            <div class="stat-main-info">
-              <h3 class="stat-value" style="color: #06b6d4">{{ getValue('new_visits') }}</h3>
-              <span class="stat-label">New Visits</span>
-            </div>
-          </div>
-          <div
-            v-if="dashboard.compLabel"
-            class="stat-card-footer mt-auto pt-1"
-          >
-            <div class="stat-comparison">
-              <span class="prev-value text-muted">{{ getPrevValue('new_visits') }}</span>
-              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
-            </div>
-          </div>
-        </div>
-      </CCol>
-
-      <!-- Followups -->
-      <CCol class="metric-col">
-        <div
-          class="stat-card premium-shadow shadow-purple"
-          style="border-left: 4px solid #6610f2; border-top: 1px solid #6610f2"
-        >
-          <div class="stat-card-header mb-1">
-            <div class="stat-icon-wrapper" style="background-color: rgba(102, 16, 242, 0.15)">
-              <CIcon :icon="cilUser" class="stat-icon" style="color: #6610f2" />
-            </div>
-            <div class="stat-main-info">
-              <h3 class="stat-value" style="color: #6610f2">{{ getValue('followups') }}</h3>
-              <span class="stat-label">Follow-ups</span>
-            </div>
-          </div>
-          <div
-            v-if="dashboard.compLabel"
-            class="stat-card-footer mt-auto pt-1"
-          >
-            <div class="stat-comparison">
-              <span class="prev-value text-muted">{{ getPrevValue('followups') }}</span>
-              <span class="prev-label ms-1">{{ dashboard.compLabel }}</span>
             </div>
           </div>
         </div>
