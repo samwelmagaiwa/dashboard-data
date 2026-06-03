@@ -390,8 +390,8 @@ const barLabelsPlugin = {
             ctx.textAlign = 'right'
             ctx.fillText(`${prevConsulted.toLocaleString()} ↑`, x - 5, subY)
             
-            // Draw Previous Not Consulted (Pink with Down Arrow)
-            ctx.fillStyle = '#ec4899'
+            // Draw Previous Not Consulted (Red with Down Arrow)
+            ctx.fillStyle = '#dc2626'
             ctx.textAlign = 'left'
             ctx.fillText(`↓ ${prevPending.toLocaleString()}`, x + 5, subY)
           }
@@ -570,8 +570,8 @@ const barLabelsPlugin = {
           <div class="d-flex align-items-center gap-2 ps-2 border-start border-slate-200">
              <span class="fw-black" style="color: #16a34a; font-size: 16px">↑</span>
              <small class="fw-bold" style="color: #16a34a; font-size: 10px; letter-spacing: 0.5px">CONSULTED</small>
-             <span class="fw-black ms-1" style="color: #ec4899; font-size: 16px">↓</span>
-             <small class="fw-bold" style="color: #ec4899; font-size: 10px; letter-spacing: 0.5px">NOT CONS.</small>
+             <span class="fw-black ms-1" style="color: #dc2626; font-size: 16px">↓</span>
+             <small class="fw-bold" style="color: #dc2626; font-size: 10px; letter-spacing: 0.5px">NOT CONS.</small>
           </div>
         </div>
 
