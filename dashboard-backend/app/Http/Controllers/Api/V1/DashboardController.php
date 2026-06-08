@@ -1024,33 +1024,43 @@ class DashboardController extends Controller
         $startDate = $request->query('start_date');
         $endDate = $request->query('end_date');
         $singleDate = $request->query('date');
+        $clinicName = $request->query('clinic_name');
 
         if (!$startDate || !$endDate) {
             $startDate = $singleDate ?? date('Y-m-d');
             $endDate = $startDate;
         }
 
-        $cacheKey = $this->cacheKey('pending_patients', $startDate, $endDate);
+        $clinicSuffix = $clinicName ? '_' . md5($clinicName) : '_all';
+        $cacheKey = $this->cacheKey('pending_patients', $startDate, $endDate) . $clinicSuffix;
         $isToday = ($startDate <= date('Y-m-d') && $endDate >= date('Y-m-d'));
         $ttl = $isToday ? 30 : 600;
 
-        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate) {
-            $patients = Visit::where('visit_date', '>=', $startDate)
+        return Cache::remember($cacheKey, $ttl, function() use ($startDate, $endDate, $clinicName) {
+            $query = Visit::where('visit_date', '>=', $startDate)
                 ->where('visit_date', '<=', $endDate)
                 ->where(function($q) {
                     $q->where('visit_status', '!=', 'C')
                       ->orWhereNull('visit_status');
-                })
-                ->select('id', 'mr_number', 'visit_date', 'cons_time')
+                });
+
+            if ($clinicName && $clinicName !== 'All Clinics') {
+                $query->where('clinic_name', $clinicName);
+            }
+
+            $patients = $query
+                ->select('id', 'mr_number', 'visit_date', 'cons_time', 'bill_doct_name', 'clinic_name', 'pat_age')
                 ->orderBy('visit_date', 'asc')
                 ->orderBy('cons_time', 'asc')
                 ->orderBy('id', 'asc')
-                ->limit(200)
+                ->limit(5000)
                 ->get();
 
             return response()->json([
                 'status' => 'success',
-                'data' => $patients
+                'data' => $patients,
+                'clinic_name' => $clinicName ?? 'All Clinics',
+                'total' => $patients->count(),
             ]);
         });
     }

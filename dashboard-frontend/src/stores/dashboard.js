@@ -1260,5 +1260,6 @@ export const useDashboardStore = defineStore('dashboard', () => {
     offlineTimerCountdown,
     isUsingCachedData,
     isOfflineUIReported,
+    calculateDateRange,
   }
 })
