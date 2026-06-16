@@ -1169,22 +1169,7 @@ const exportPendingToExcel = async () => {
             style="height: 100%"
           />
 
-          <!-- ── View Buttons overlaid on each bar ── -->
-          <template v-for="(btn, idx) in barButtonPositions" :key="idx">
-            <button
-              class="bar-view-btn"
-              :style="{
-                left: `${btn.x}px`,
-                top: `${btn.y}px`,
-              }"
-              @click="openPendingModal(btn.clinicName, btn.pendingCount)"
-              :title="`View ${pendingLabel} patients for ${btn.clinicName}`"
-            >
-              <span class="view-btn-icon">👁</span>
-              <span class="view-btn-label">View</span>
-              <span class="view-btn-badge">{{ btn.pendingCount }}</span>
-            </button>
-          </template>
+
         </div>
       </div>
     </div>
