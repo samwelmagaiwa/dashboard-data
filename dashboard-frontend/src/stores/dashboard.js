@@ -510,40 +510,48 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
         // If remote API is down, use cache instead of showing stale backend data
         if (!isRemoteApiAvailable) {
-          console.log('[DashboardStore] Remote API unavailable, attempting to restore from cache')
-          const cachedData = getCachedData(start_date, end_date)
+          console.log('[DashboardStore] Remote API unavailable')
+          const hasDbStats = data?.stats?.stats && data?.stats?.stats?.total_visits > 0
           
-          if (cachedData) {
-            console.log('[DashboardStore] Cache found, restoring cached data')
-            realStats.value = cachedData.stats
-            previousStats.value = cachedData.previousStats
-            compLabel.value = cachedData.compLabel
-            realClinics.value = cachedData.clinics
-            pieStats.value = cachedData.pie
-            compStats.value = cachedData.comparison
-            referralStats.value = cachedData.referrals
-            serviceTrendData.value = cachedData.trends || { labels: [], datasets: [] }
+          if (!hasDbStats) {
+            console.log('[DashboardStore] No database stats available, attempting local cache...')
+            const cachedData = getCachedData(start_date, end_date)
             
-            // Mark that we're using cached data and start countdown
-            isUsingCachedData.value = true
-            startOfflineCountdown()
-            trendStatus.value = 'cached'
-            
-            lastUpdated.value = new Date().toLocaleTimeString()
-            if (!isInitialized.value) {
-              isInitialized.value = true
+            if (cachedData) {
+              console.log('[DashboardStore] Cache found, restoring cached data')
+              realStats.value = cachedData.stats
+              previousStats.value = cachedData.previousStats
+              compLabel.value = cachedData.compLabel
+              realClinics.value = cachedData.clinics
+              pieStats.value = cachedData.pie
+              compStats.value = cachedData.comparison
+              referralStats.value = cachedData.referrals
+              serviceTrendData.value = cachedData.trends || { labels: [], datasets: [] }
+              
+              // Mark that we're using cached data and start countdown
+              isUsingCachedData.value = true
+              startOfflineCountdown()
+              trendStatus.value = 'cached'
+              
+              lastUpdated.value = new Date().toLocaleTimeString()
+              if (!isInitialized.value) {
+                isInitialized.value = true
+              }
+              if (!initialLoadComplete) {
+                initialLoadComplete = true
+                setTimeout(() => startPulse(), 2000)
+              }
+              return
+            } else {
+              console.log('[DashboardStore] No cache or DB stats available, showing empty state')
+              trendStatus.value = 'error'
+              isUsingCachedData.value = false
+              stopOfflineCountdown()
+              return
             }
-            if (!initialLoadComplete) {
-              initialLoadComplete = true
-              setTimeout(() => startPulse(), 2000)
-            }
-            return
           } else {
-            console.log('[DashboardStore] No cache available, showing empty state')
-            trendStatus.value = 'error'
-            isUsingCachedData.value = false
-            stopOfflineCountdown()
-            return
+            console.log('[DashboardStore] Database has synced stats. Using DB stats as fallback.')
+            startOfflineCountdown()
           }
         }
 

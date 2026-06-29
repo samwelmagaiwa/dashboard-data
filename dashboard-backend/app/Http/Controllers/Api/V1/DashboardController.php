@@ -30,8 +30,8 @@ class DashboardController extends Controller
                 $url = rtrim($baseUrl, '/') . '/' . now()->format('Ymd');
 
                 $response = Http::withBasicAuth($username, $password)
-                    ->connectTimeout(3)
-                    ->timeout(5)
+                    ->connectTimeout(5)
+                    ->timeout(15)
                     ->retry(1, 300)
                     ->get($url);
 
