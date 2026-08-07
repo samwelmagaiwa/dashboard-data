@@ -144,7 +144,10 @@ class DashboardController extends Controller
             ->exists() || ($activeBatch !== null);
 
         // AUTO-TRIGGER SYNC FOR GAPS (Silent Background Update)
-        if (!$isSyncingNow) {
+        // Only dispatch when the remote API is reachable — if Apache on the HIS server
+        // is down, dispatching jobs that will all fail just wastes queue workers and
+        // keeps the dashboard stuck in "syncing" state while showing 0 data.
+        if (!$isSyncingNow && $this->getRemoteApiAvailability()) {
             $mainGaps = $this->gapService->detectGaps($startDate, $endDate);
             $compGaps = $this->gapService->detectGaps($comparison['start']->toDateString(), $comparison['end']->toDateString());
             $allGaps = array_merge($mainGaps, $compGaps);

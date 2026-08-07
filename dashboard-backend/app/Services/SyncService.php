@@ -192,7 +192,7 @@ class SyncService
             $response = Http::withBasicAuth($username, $password)
                 ->connectTimeout(5)
                 ->timeout(60)
-                ->retry(2, 500)
+                ->retry(1, 1000)
                 ->get($url);
 
             if ($response->successful()) {
