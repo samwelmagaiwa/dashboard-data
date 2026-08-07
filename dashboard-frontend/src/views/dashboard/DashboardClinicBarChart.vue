@@ -161,7 +161,7 @@ const barData = computed(() => {
 
   return {
     labels: clinics.map((c) => {
-      const name = c.clinic_name.replace(/^MLG\s+/i, '')
+      const name = c.clinic_name
       if (name.length > 10 && name.includes(' ')) {
         const words = name.split(' ')
         const mid = Math.ceil(words.length / 2)
@@ -671,7 +671,7 @@ const formatTime = (t) => {
 }
 
 const pendingModalClinicShortName = computed(() =>
-  (pendingModal.value.clinicName || '').replace(/^MLG\s+/i, '')
+  (pendingModal.value.clinicName || '')
 )
 
 const isToday = computed(() => dashboard.isTodaySelected)
@@ -886,7 +886,7 @@ const exportPendingToExcel = async () => {
       const consultedFill = consultedVal > 0 ? CLR_CONSLT : stripe
       const consultedTxt  = consultedVal > 0 ? CLR_GREEN_TXT : CLR_DARK_TXT
 
-      const clinicShort = (clinic.clinic_name || '').replace(/^MLG\s+/i, '')
+      const clinicShort = (clinic.clinic_name || '')
 
       summaryRows.push([
         sc(i + 1,                      stripe,       false, 11, 'center'),
@@ -966,7 +966,7 @@ const exportPendingToExcel = async () => {
 
     // Iterate clinics for Detail sheet sorted by pending count to match summary
     sortedByPending.forEach((clinic, ci) => {
-      const clinicShort = (clinic.clinic_name || '').replace(/^MLG\s+/i, '')
+      const clinicShort = (clinic.clinic_name || '')
       const patients = patientMap[clinic.clinic_name] || []
       const pendingVal = clinic.pending || 0
       const prevPendingVal = clinic.previous_pending || 0
