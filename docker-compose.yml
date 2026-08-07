@@ -1,16 +1,27 @@
 x-backend-service: &backend-service
   build:
     context: ./dashboard-backend
-  image: ${BACKEND_IMAGE:-samwelmagaiwa/dashboard-backend}:${IMAGE_TAG:-latest}
+  image: ${BACKEND_IMAGE:-samwelmagaiwa/mlg-dashboard-backend}:${IMAGE_TAG:-latest}
   restart: unless-stopped
   env_file:
     - ${BACKEND_ENV_FILE:-./env/backend.production.env}
   volumes:
     - ${BACKEND_STORAGE_PATH:-./dashboard-backend/storage}:/var/www/html/storage
+  depends_on:
+    - dashboard_redis
   networks:
     - dashboard_network
 
 services:
+  dashboard_redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - dashboard_network
+
   dashboard_backend:
     <<: *backend-service
     environment:
@@ -21,8 +32,6 @@ services:
 
   dashboard_worker_1:
     <<: *backend-service
-    depends_on:
-      - dashboard_backend
     environment:
       CONTAINER_ROLE: worker
       RUN_MIGRATIONS: "false"
@@ -30,8 +39,6 @@ services:
 
   dashboard_worker_2:
     <<: *backend-service
-    depends_on:
-      - dashboard_backend
     environment:
       CONTAINER_ROLE: worker
       RUN_MIGRATIONS: "false"
@@ -39,8 +46,6 @@ services:
 
   dashboard_worker_3:
     <<: *backend-service
-    depends_on:
-      - dashboard_backend
     environment:
       CONTAINER_ROLE: worker
       RUN_MIGRATIONS: "false"
@@ -48,8 +53,6 @@ services:
 
   dashboard_scheduler:
     <<: *backend-service
-    depends_on:
-      - dashboard_backend
     environment:
       CONTAINER_ROLE: scheduler
       RUN_MIGRATIONS: "false"
@@ -57,8 +60,6 @@ services:
 
   dashboard_watcher:
     <<: *backend-service
-    depends_on:
-      - dashboard_backend
     environment:
       CONTAINER_ROLE: watcher
       RUN_MIGRATIONS: "false"
@@ -69,7 +70,7 @@ services:
       context: ./dashboard-frontend
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
-    image: ${FRONTEND_IMAGE:-samwelmagaiwa/dashboard-frontend}:${IMAGE_TAG:-latest}
+    image: ${FRONTEND_IMAGE:-samwelmagaiwa/mlg-dashboard-frontend}:${IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       - dashboard_backend
@@ -85,3 +86,6 @@ services:
 networks:
   dashboard_network:
     driver: bridge
+
+volumes:
+  redis_data:
