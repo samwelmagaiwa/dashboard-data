@@ -24,7 +24,7 @@ class SyncWatcher extends Command
         while (true) {
             $today    = Carbon::today()->format('Y-m-d');
             $todayYmd = Carbon::today()->format('Ymd');
-            $baseUrl  = env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard');
+            $baseUrl  = config('dashboard.sync.base_url');
             $url      = "{$baseUrl}/{$todayYmd}";
 
             try {
@@ -72,8 +72,8 @@ class SyncWatcher extends Command
                     }
 
                     // ── Poll HIS API ─────────────────────────────────────────
-                    $username = env('DASHBOARD_API_USERNAME');
-                    $password = env('DASHBOARD_API_PASSWORD');
+                    $username = config('dashboard.sync.username');
+                    $password = config('dashboard.sync.password');
 
                     $response = Http::withBasicAuth($username, $password)
                         ->connectTimeout(10)

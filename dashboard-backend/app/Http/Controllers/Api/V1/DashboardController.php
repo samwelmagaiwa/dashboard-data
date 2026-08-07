@@ -20,19 +20,19 @@ class DashboardController extends Controller
 {
     private function getRemoteApiAvailability(): bool
     {
-        // Cache for only 3 seconds for faster detection of remote API failures
-        // When API goes down, frontend should detect within ~3 seconds instead of up to 20 seconds
-        return Cache::remember('dashboard_remote_api_health_v1', 3, function () {
+        // Cache for 15 seconds — short enough for timely detection, long enough to avoid
+        // blocking multiple concurrent requests while the HIS API check is in-flight.
+        // No retry: health checks must be fast; a single probe is sufficient.
+        return Cache::remember('dashboard_remote_api_health_v1', 15, function () {
             try {
-                $username = config('dashboard.sync.username', env('DASHBOARD_API_USERNAME'));
-                $password = config('dashboard.sync.password', env('DASHBOARD_API_PASSWORD'));
-                $baseUrl = config('dashboard.sync.base_url', env('DASHBOARD_API_BASE_URL', 'http://192.168.235.250/labsms/swagger/dashboard'));
+                $username = config('dashboard.sync.username');
+                $password = config('dashboard.sync.password');
+                $baseUrl = config('dashboard.sync.base_url');
                 $url = rtrim($baseUrl, '/') . '/' . now()->format('Ymd');
 
                 $response = Http::withBasicAuth($username, $password)
                     ->connectTimeout(5)
-                    ->timeout(15)
-                    ->retry(1, 300)
+                    ->timeout(10)
                     ->get($url);
 
                 if (!$response->successful()) {
