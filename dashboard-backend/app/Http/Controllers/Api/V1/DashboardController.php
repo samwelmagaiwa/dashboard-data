@@ -20,38 +20,47 @@ class DashboardController extends Controller
 {
     private function getRemoteApiAvailability(): bool
     {
-        // Cache for 15 seconds — short enough for timely detection, long enough to avoid
-        // blocking multiple concurrent requests while the HIS API check is in-flight.
-        // No retry: health checks must be fast; a single probe is sufficient.
-        return Cache::remember('dashboard_remote_api_health_v1', 15, function () {
-            try {
-                $username = config('dashboard.sync.username');
-                $password = config('dashboard.sync.password');
-                $baseUrl = config('dashboard.sync.base_url');
-                $url = rtrim($baseUrl, '/') . '/' . now()->format('Ymd');
+        $staleKey  = 'dashboard_remote_api_health_v1';
+        $probeKey  = 'dashboard_remote_api_probe_running';
 
-                $response = Http::withBasicAuth($username, $password)
-                    ->connectTimeout(5)
-                    ->timeout(10)
-                    ->get($url);
+        // Always return the last known value immediately — never block the request.
+        // A background probe refreshes the cached value every 30 seconds.
+        $known = Cache::get($staleKey);
 
-                if (!$response->successful()) {
-                    return false;
+        // Kick off a fresh probe only if: no value exists yet, OR cache is stale
+        // AND no other probe is already in flight (lock prevents stampede).
+        $isStale = ($known === null || !Cache::has($staleKey . '_fresh'));
+
+        if ($isStale && Cache::add($probeKey, 1, 12)) {
+            // Run the probe in a deferred way: dispatch a closure to the queue
+            // so this HTTP request returns immediately.
+            dispatch(function () use ($staleKey, $probeKey) {
+                try {
+                    $username = config('dashboard.sync.username');
+                    $password = config('dashboard.sync.password');
+                    $baseUrl  = config('dashboard.sync.base_url');
+                    $url      = rtrim($baseUrl, '/') . '/' . now()->format('Ymd');
+
+                    $response = Http::withBasicAuth($username, $password)
+                        ->connectTimeout(5)
+                        ->timeout(10)
+                        ->get($url);
+
+                    $body = trim((string) ($response->successful() ? $response->body() : ''));
+                    json_decode($body, true);
+                    $result = $response->successful() && $body !== '' && json_last_error() === JSON_ERROR_NONE;
+                } catch (\Throwable $e) {
+                    $result = false;
                 }
 
-                $body = trim((string) $response->body());
+                Cache::put($staleKey, $result, 120);
+                Cache::put($staleKey . '_fresh', 1, 30);
+                Cache::forget($probeKey);
+            })->onQueue('high');
+        }
 
-                if ($body === '') {
-                    return false;
-                }
-
-                json_decode($body, true);
-
-                return json_last_error() === JSON_ERROR_NONE;
-            } catch (\Throwable $e) {
-                return false;
-            }
-        });
+        // Return last known value; default true on first boot (optimistic).
+        return $known ?? true;
     }
 
     private function rememberUnlessFresh(Request $request, string $cacheKey, int $ttl, callable $callback)
