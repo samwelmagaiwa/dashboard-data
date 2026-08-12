@@ -56,19 +56,29 @@ const periodOptions = [
 
 const filterMode = ref(dashboard.selectedPeriod)
 
+// True only during the brief API call before activeBatchId is set
+const isSyncSubmitting = ref(false)
+
 const handleSync = async () => {
   if (!confirm('Start background sync for the selected period?')) return
+  isSyncSubmitting.value = true
   try {
     const res = await dashboard.syncCurrentRange()
-    alert('Sync Task Started: ' + res.message + '\nData will refresh in the background.')
+    if (!res?.ok) {
+      alert(res?.message || 'Could not start sync — no date range selected.')
+    }
+    // Success: button transitions to "Syncing..." automatically via isSyncing
   } catch (error) {
-    alert('Sync trigger failed. Please check the console.')
+    alert('Sync trigger failed. Please check your connection and try again.')
+  } finally {
+    isSyncSubmitting.value = false
   }
 }
 
-const handleCheckGaps = async () => {
-  await dashboard.fetchGaps()
+const handleCheckGaps = () => {
+  // Open modal immediately so the user sees activity (loading spinner inside modal)
   gapsModalVisible.value = true
+  dashboard.fetchGaps()
 }
 
 const handleExport = async () => {
@@ -172,33 +182,45 @@ onMounted(() => {
           variant="outline"
           class="me-2 d-flex align-items-center position-relative"
           @click="handleSync"
-          :disabled="dashboard.isSyncing"
+          :disabled="dashboard.isSyncing || isSyncSubmitting"
           title="Background Sync"
         >
           <!-- Small dot if sync is needed -->
-          <span 
-            v-if="dashboard.isSyncNeeded" 
-            class="position-absolute translate-middle p-1 bg-danger border border-light rounded-circle" 
+          <span
+            v-if="dashboard.isSyncNeeded"
+            class="position-absolute translate-middle p-1 bg-danger border border-light rounded-circle"
             style="top: 5px; left: 5px"
           >
             <span class="visually-hidden">Sync Needed</span>
           </span>
 
           <CIcon
-            :icon="dashboard.isSyncing ? 'cil-reload' : 'cil-sync'"
-            :class="{ 'me-2': true, spinner: dashboard.isSyncing }"
+            :icon="dashboard.isSyncing || isSyncSubmitting ? 'cil-reload' : 'cil-sync'"
+            :class="{ 'me-2': true, spinner: dashboard.isSyncing || isSyncSubmitting }"
           />
-          {{ dashboard.isSyncing ? (dashboard.syncProgress > 0 ? `Syncing ${dashboard.syncProgress}%` : 'Syncing...') : 'Sync' }}
+          {{
+            dashboard.isSyncing
+              ? dashboard.syncProgress > 0
+                ? `Syncing ${dashboard.syncProgress}%`
+                : 'Syncing...'
+              : isSyncSubmitting
+                ? 'Starting...'
+                : 'Sync'
+          }}
         </CButton>
         <CButton
           color="danger"
           variant="outline"
-          class="me-2"
+          class="me-2 d-flex align-items-center"
           @click="handleCheckGaps"
+          :disabled="dashboard.gapsLoading"
           title="Check for missing data"
         >
-          <CIcon icon="cil-search" class="me-2" />
-          Gaps
+          <CIcon
+            :icon="dashboard.gapsLoading ? 'cil-reload' : 'cil-search'"
+            :class="{ 'me-2': true, spinner: dashboard.gapsLoading }"
+          />
+          {{ dashboard.gapsLoading ? 'Checking...' : 'Gaps' }}
         </CButton>
         <CDropdown variant="nav-item" :caret="false" class="me-2">
           <CDropdownToggle color="secondary" variant="outline" class="d-flex align-items-center">
@@ -349,6 +371,10 @@ onMounted(() => {
           <CIcon icon="cil-reload" size="xl" class="spinner text-primary mb-2" />
           <p>Analyzing data for gaps...</p>
         </div>
+        <div v-else-if="dashboard.gaps === null" class="text-center py-4">
+          <CIcon icon="cil-warning" size="xl" class="text-danger mb-2" />
+          <p class="text-danger fw-bold">Failed to load gap data. Please close and try again.</p>
+        </div>
         <div v-else-if="dashboard.gaps.length === 0" class="text-center py-4">
           <CIcon icon="cil-check-circle" size="xxl" class="text-success mb-3" />
           <p class="fs-5 text-success fw-bold">
@@ -385,8 +411,8 @@ onMounted(() => {
                           res.message +
                           (ignoredSummary ? '\n\nIgnored dates:\n' + ignoredSummary : ''),
                       )
-                      gapsModalVisible = false
-                      forceGapRepair = false
+                      gapsModalVisible.value = false
+                      forceGapRepair.value = false
                     } catch (e) {
                       alert('Repair failed: ' + (e.response?.data?.error || e.message))
                     }
