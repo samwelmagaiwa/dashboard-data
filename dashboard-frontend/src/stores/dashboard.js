@@ -494,8 +494,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
 
         const period = selectedPeriod.value === 'range' ? 'range' : selectedPeriod.value
         const breakdownParam = breakdownMode.value ? '&breakdown=monthly' : ''
-        // Always use fresh=1 to avoid stale cache issues with referral and other data
-        const freshParam = '&fresh=1'
+        // Only bypass cache when an active sync batch is running so we see live progress.
+        // For normal polls the 30-second backend cache serves the snapshot instantly.
+        const freshParam = isBackgroundSyncRefresh ? '&fresh=1' : ''
 
         const { data } = await api.get(
           `/dashboard/snapshot?start_date=${start_date}&end_date=${end_date}&period=${period}${breakdownParam}${freshParam}&_t=${timestamp}`,

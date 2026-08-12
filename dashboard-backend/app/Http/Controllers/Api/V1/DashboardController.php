@@ -98,6 +98,32 @@ class DashboardController extends Controller
         return $prefix . '_' . implode('_', $parts) . '_v' . $this->getCacheVersion();
     }
 
+    /**
+     * Cheap meta: only sync-status queries, no stats aggregation.
+     * Used by getSnapshot to keep UI indicators live without re-running all DB stats.
+     */
+    private function getLiveMeta(): array
+    {
+        $activeBatch = DB::table('job_batches')
+            ->whereNull('finished_at')
+            ->whereNull('cancelled_at')
+            ->latest('created_at')
+            ->first();
+
+        $isSyncingNow = \App\Models\SyncLog::whereIn('status', ['PROCESSING', 'PENDING'])
+            ->where('updated_at', '>', now()->subMinutes(15))
+            ->exists() || ($activeBatch !== null);
+
+        return [
+            'is_syncing'           => $isSyncingNow,
+            'active_batch_id'      => $activeBatch ? $activeBatch->id : null,
+            'remote_api_available' => $this->getRemoteApiAvailability(),
+            'sync_needed'          => false,
+            'is_up_to_date'        => !$isSyncingNow,
+            'cached_at'            => now()->toDateTimeString(),
+        ];
+    }
+
     public function getStats(Request $request)
     {
         $startDate = $request->query('start_date');
@@ -144,10 +170,10 @@ class DashboardController extends Controller
             ->exists() || ($activeBatch !== null);
 
         // AUTO-TRIGGER SYNC FOR GAPS (Silent Background Update)
-        // Only dispatch when the remote API is reachable — if Apache on the HIS server
-        // is down, dispatching jobs that will all fail just wastes queue workers and
-        // keeps the dashboard stuck in "syncing" state while showing 0 data.
-        if (!$isSyncingNow && $this->getRemoteApiAvailability()) {
+        // Throttled to once per 2 minutes per date range to avoid running detectGaps
+        // (2 DB queries) on every dashboard poll. Only dispatch when remote API is up.
+        $autoSyncThrottleKey = 'auto_gap_sync_throttle_' . md5($startDate . $endDate);
+        if (!$isSyncingNow && $this->getRemoteApiAvailability() && Cache::add($autoSyncThrottleKey, 1, 120)) {
             $mainGaps = $this->gapService->detectGaps($startDate, $endDate);
             $compGaps = $this->gapService->detectGaps($comparison['start']->toDateString(), $comparison['end']->toDateString());
             $allGaps = array_merge($mainGaps, $compGaps);
@@ -980,10 +1006,12 @@ class DashboardController extends Controller
             ];
         });
 
-        // Ensure we always return the LIVE meta (including sync status) 
-        // to avoid stale UI indicators in the consolidated snapshot.
-        $liveStats = $this->getStats($request);
-        $data['stats']['meta'] = $liveStats['meta'];
+        // Always inject live sync-status meta so UI indicators are never stale,
+        // even when the rest of the snapshot is served from cache.
+        // Merging preserves cached fields (expected_days, aggregated_days) while
+        // overwriting only the time-sensitive sync-status fields.
+        $liveMeta = $this->getLiveMeta();
+        $data['stats']['meta'] = array_merge($data['stats']['meta'] ?? [], $liveMeta);
 
         return $data;
     }
