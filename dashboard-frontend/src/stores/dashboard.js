@@ -492,6 +492,25 @@ export const useDashboardStore = defineStore('dashboard', () => {
           detailedClinics.value = null
         }
 
+        // Show cached data immediately so the loading screen disappears fast.
+        // The API call below will silently update with fresh data once it arrives.
+        if (!silent && isLoading.value) {
+          const preloadCache = getCachedData(start_date, end_date)
+          if (preloadCache) {
+            realStats.value = preloadCache.stats
+            previousStats.value = preloadCache.previousStats
+            compLabel.value = preloadCache.compLabel
+            realClinics.value = preloadCache.clinics
+            pieStats.value = preloadCache.pie
+            compStats.value = preloadCache.comparison
+            referralStats.value = preloadCache.referrals
+            serviceTrendData.value = preloadCache.trends || { labels: [], datasets: [] }
+            isLoading.value = false
+            isTrendsLoading.value = false
+            if (!isInitialized.value) isInitialized.value = true
+          }
+        }
+
         const period = selectedPeriod.value === 'range' ? 'range' : selectedPeriod.value
         const breakdownParam = breakdownMode.value ? '&breakdown=monthly' : ''
         // Only bypass cache when an active sync batch is running so we see live progress.
