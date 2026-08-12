@@ -261,7 +261,7 @@ class DashboardController extends Controller
             ->selectRaw('
                 SUM(total_visits) as total_visits,
                 SUM(consulted) as consulted,
-                (SUM(total_visits) - SUM(consulted)) as pending,
+                SUM(pending) as pending,
                 SUM(matched_count) as matched_count,
                 SUM(mismatched_count) as mismatched_count,
                 SUM(new_visits) as new_visits,
@@ -848,7 +848,7 @@ class DashboardController extends Controller
                 SUM(total_visits) as opd,
                 SUM(emergency) as emergency,
                 SUM(consulted) as consulted,
-                (SUM(total_visits) - SUM(consulted)) as not_consulted,
+                SUM(pending) as not_consulted,
                 SUM(new_visits) as new_visits,
                 SUM(followups) as followups
             ')
