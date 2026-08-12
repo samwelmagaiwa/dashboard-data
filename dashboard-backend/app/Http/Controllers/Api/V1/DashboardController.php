@@ -498,17 +498,23 @@ class DashboardController extends Controller
         $startDate = $request->query('start_date', Carbon::today()->subDays(30)->toDateString());
         $endDate = $request->query('end_date', Carbon::today()->toDateString());
 
-        $gaps = $this->gapService->detectGaps($startDate, $endDate);
+        $cacheKey = $this->cacheKey('gaps', $startDate, $endDate);
+        $isToday = ($endDate >= date('Y-m-d'));
+        $ttl = $isToday ? 120 : 600;
 
-        return [
-            'start_date' => $startDate,
-            'end_date' => $endDate,
-            'gaps' => $gaps,
-            'gap_count' => count($gaps),
-            'calendar' => [
-                'expected_data_days' => $this->gapService->countExpectedDataDays($startDate, $endDate),
-            ],
-        ];
+        return $this->rememberUnlessFresh($request, $cacheKey, $ttl, function () use ($startDate, $endDate) {
+            $gaps = $this->gapService->detectGaps($startDate, $endDate);
+
+            return [
+                'start_date' => $startDate,
+                'end_date' => $endDate,
+                'gaps' => $gaps,
+                'gap_count' => count($gaps),
+                'calendar' => [
+                    'expected_data_days' => $this->gapService->countExpectedDataDays($startDate, $endDate),
+                ],
+            ];
+        });
     }
 
     /**

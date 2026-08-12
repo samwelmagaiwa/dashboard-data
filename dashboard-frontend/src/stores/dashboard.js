@@ -911,10 +911,12 @@ export const useDashboardStore = defineStore('dashboard', () => {
     try {
       const response = await api.get('/dashboard/gaps', {
         params: { start_date, end_date, _t: Date.now() },
+        timeout: 30000,
       })
       gaps.value = response.data.gaps || []
     } catch (error) {
       console.error('[DashboardStore] Error fetching gaps:', error)
+      gaps.value = null
     } finally {
       gapsLoading.value = false
     }
