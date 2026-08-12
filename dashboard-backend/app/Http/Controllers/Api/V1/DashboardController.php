@@ -1054,6 +1054,12 @@ class DashboardController extends Controller
                 ->where(function($q) {
                     $q->where('visit_status', '!=', 'C')
                       ->orWhereNull('visit_status');
+                })
+                ->where(function($q) {
+                    // Emergency patients with a recorded consTime are consulted even if status != C
+                    $q->where('clinic_name', '!=', 'MLG EMERGENCY MEDICINE')
+                      ->orWhereNull('cons_time')
+                      ->orWhere('cons_time', '');
                 });
 
             if ($clinicName && $clinicName !== 'All Clinics') {
