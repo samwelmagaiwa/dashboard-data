@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Services\CircuitBreaker;
 use App\Services\SyncService;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
@@ -18,10 +19,10 @@ class SyncForDateJob implements ShouldQueue
 
     public $date;
     public $force;
-    public $timeout = 600; // 10 minutes per job to be safe
-    public $uniqueFor = 600; // Lock expires after 10 minutes if job crashes
-    public $tries = 3;
-    public $backoff = [30, 60, 120];
+    public $timeout = 120;  // 2 min max: 30s HTTP + DB writes + headroom
+    public $uniqueFor = 120;
+    public $tries = 2;
+    public $backoff = [60, 180];
 
     public function __construct($date, $force = false)
     {
@@ -47,6 +48,17 @@ class SyncForDateJob implements ShouldQueue
     public function handle(SyncService $syncService)
     {
         if ($this->batch() && $this->batch()->cancelled()) {
+            return;
+        }
+
+        // If the circuit is open the remote API is known to be down.
+        // Release the worker immediately — don't block it for 30s waiting on a dead socket.
+        // The job will be retried automatically after the backoff; by then the circuit
+        // may have transitioned to HALF_OPEN and allowed a probe through.
+        $circuit = new CircuitBreaker('his_api');
+        if (!$circuit->isAvailable()) {
+            Log::info("[SyncForDateJob] Circuit OPEN — skipping {$this->date}, releasing worker.");
+            $this->release($circuit->remainingOpenSeconds());
             return;
         }
 

@@ -20,46 +20,51 @@ class DashboardController extends Controller
 {
     private function getRemoteApiAvailability(): bool
     {
-        $staleKey  = 'dashboard_remote_api_health_v1';
-        $probeKey  = 'dashboard_remote_api_probe_running';
+        $circuit = new \App\Services\CircuitBreaker('his_api');
 
-        // Always return the last known value immediately — never block the request.
-        // A background probe refreshes the cached value every 30 seconds.
-        $known = Cache::get($staleKey);
-
-        // Kick off a fresh probe only if: no value exists yet, OR cache is stale
-        // AND no other probe is already in flight (lock prevents stampede).
-        $isStale = ($known === null || !Cache::has($staleKey . '_fresh'));
-
-        if ($isStale && Cache::add($probeKey, 1, 12)) {
-            // Run the probe in a deferred way: dispatch a closure to the queue
-            // so this HTTP request returns immediately.
-            dispatch(function () use ($staleKey, $probeKey) {
-                try {
-                    $username = config('dashboard.sync.username');
-                    $password = config('dashboard.sync.password');
-                    $baseUrl  = config('dashboard.sync.base_url');
-                    $url      = rtrim($baseUrl, '/') . '/' . now()->format('Ymd');
-
-                    $response = Http::withBasicAuth($username, $password)
-                        ->connectTimeout(5)
-                        ->timeout(10)
-                        ->get($url);
-
-                    $body = trim((string) ($response->successful() ? $response->body() : ''));
-                    json_decode($body, true);
-                    $result = $response->successful() && $body !== '' && json_last_error() === JSON_ERROR_NONE;
-                } catch (\Throwable $e) {
-                    $result = false;
-                }
-
-                Cache::put($staleKey, $result, 120);
-                Cache::put($staleKey . '_fresh', 1, 30);
-                Cache::forget($probeKey);
-            })->onQueue('high');
+        // If circuit is OPEN the API is known to be down — return immediately without
+        // touching the network. This is the fast path for the degraded state.
+        if ($circuit->getState() === \App\Services\CircuitBreaker::STATE_OPEN) {
+            return false;
         }
 
-        // Return last known value; default true on first boot (optimistic).
+        $cacheKey  = 'dashboard_remote_api_health_v1';
+        $probeKey  = 'dashboard_remote_api_probe_v1';
+
+        // Return the last known value immediately so this HTTP request never blocks.
+        $known = Cache::get($cacheKey);
+
+        // Refresh the cached value at most once every 30 seconds.
+        // The probe runs inline (not in the queue) so it can never be blocked by
+        // stuck sync workers. A Cache::add lock prevents concurrent probe stampedes.
+        if ($known === null || !Cache::has($cacheKey . '_fresh')) {
+            if (Cache::add($probeKey, 1, 15)) {
+                try {
+                    $url = rtrim(config('dashboard.sync.base_url'), '/') . '/' . now()->format('Ymd');
+                    $response = Http::withBasicAuth(
+                            config('dashboard.sync.username'),
+                            config('dashboard.sync.password')
+                        )
+                        ->connectTimeout(3)
+                        ->timeout(6)
+                        ->get($url);
+
+                    $body   = trim((string) ($response->successful() ? $response->body() : ''));
+                    $result = $response->successful() && $body !== '' && json_last_error() === JSON_ERROR_NONE
+                              && json_decode($body, true) !== null;
+                } catch (\Throwable $e) {
+                    $result = false;
+                } finally {
+                    Cache::forget($probeKey);
+                }
+
+                Cache::put($cacheKey, $result, 120);
+                Cache::put($cacheKey . '_fresh', 1, 30);
+
+                return $result;
+            }
+        }
+
         return $known ?? true;
     }
 

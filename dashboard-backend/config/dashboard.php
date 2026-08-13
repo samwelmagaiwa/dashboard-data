@@ -15,6 +15,13 @@ return [
         'base_url' => env('DASHBOARD_API_BASE_URL'),
     ],
 
+    'circuit_breaker' => [
+        // Consecutive failures before the circuit opens and stops hitting the API.
+        'failure_threshold' => (int) env('CIRCUIT_BREAKER_FAILURE_THRESHOLD', 2),
+        // Seconds the circuit stays OPEN before allowing a probe request (HALF_OPEN).
+        'open_ttl'          => (int) env('CIRCUIT_BREAKER_OPEN_TTL', 300),
+    ],
+
     'gap_detection' => [
         // Weekdays that are not expected to have dashboard data.
         // Carbon weekday numbering: 0 (Sunday) through 6 (Saturday).

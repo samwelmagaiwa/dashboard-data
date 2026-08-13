@@ -19,6 +19,13 @@ use Carbon\Carbon;
 
 class SyncService
 {
+    private CircuitBreaker $circuit;
+
+    public function __construct()
+    {
+        $this->circuit = new CircuitBreaker('his_api');
+    }
+
     private function getCacheVersion(): int
     {
         return config('dashboard.cache_version', 10);
@@ -189,34 +196,54 @@ class SyncService
             $username = config('dashboard.sync.username', env('DASHBOARD_API_USERNAME'));
             $password = config('dashboard.sync.password', env('DASHBOARD_API_PASSWORD'));
 
-            $response = Http::withBasicAuth($username, $password)
-                ->connectTimeout(5)
-                ->timeout(60)
-                ->retry(1, 1000)
-                ->get($url);
+            if (!$this->circuit->isAvailable()) {
+                $remaining = $this->circuit->remainingOpenSeconds();
+                $syncLog->update(['status' => 'FAILED', 'error_message' => "Circuit open — HIS API unavailable. Retrying in {$remaining}s.", 'finished_at' => now()]);
+                flock($fp, LOCK_UN);
+                fclose($fp);
+                @unlink($lockFile);
+                return ['success' => false, 'error' => 'circuit_open', 'retry_after' => $remaining];
+            }
+
+            try {
+                $response = Http::withBasicAuth($username, $password)
+                    ->connectTimeout(5)
+                    ->timeout(30)
+                    ->get($url);
+            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+                $this->circuit->recordFailure();
+                $syncLog->update(['status' => 'FAILED', 'error_message' => 'Connection failed: ' . $e->getMessage(), 'finished_at' => now()]);
+                flock($fp, LOCK_UN);
+                fclose($fp);
+                @unlink($lockFile);
+                return ['success' => false, 'error' => 'connection_failed'];
+            }
 
             if ($response->successful()) {
                 $body = $response->body();
-                
+
                 // Check if response is valid JSON
                 if (strpos(trim($body), '{') !== 0) {
-                     $syncLog->update([
+                    $this->circuit->recordFailure();
+                    $syncLog->update([
                         'status' => 'FAILED',
                         'error_message' => "HIS API returned non-JSON data (possibly Debug HTML). Snippet: " . substr(strip_tags($body), 0, 200),
                         'finished_at' => now(),
                     ]);
                     $this->clearCacheForDate($date);
-                    
+
                     flock($fp, LOCK_UN);
                     fclose($fp);
                     @unlink($lockFile);
-                    
+
                     return ['success' => false, 'error' => 'Invalid JSON from HIS'];
                 }
 
+                $this->circuit->recordSuccess();
+
                 $data = $response->json();
                 $visits = $data['data'] ?? [];
-                
+
                 if (empty($visits) && !empty($data)) {
                      Log::info("[SyncService] API returned success but empty 'data' array for $date");
                 }
@@ -240,7 +267,7 @@ class SyncService
                 // 3. Post-sync processing (Aggregated stats & healing)
                 try {
                     $this->updateAggregatedStats($date);
-                    $this->healMissingData($date); // Fast: uses 2 bulk JOIN-UPDATE queries
+                    $this->healMissingData($date);
                 } catch (\Exception $e) {
                     Log::warning("[SyncService] Post-sync processing failed for $date: " . $e->getMessage());
                 }
@@ -251,8 +278,6 @@ class SyncService
                     'finished_at' => now(),
                 ]);
 
-                // Removed redundant clearCacheForDate($date) here as updateAggregatedStats already does it.
-
                 flock($fp, LOCK_UN);
                 fclose($fp);
                 @unlink($lockFile);
@@ -260,9 +285,10 @@ class SyncService
                 return ['success' => true, 'count' => $syncedCount];
             }
 
+            $this->circuit->recordFailure();
             $syncLog->update([
                 'status' => 'FAILED',
-                'error_message' => "API error: " . $response->status(),
+                'error_message' => "API error: HTTP " . $response->status(),
                 'finished_at' => now(),
             ]);
             
