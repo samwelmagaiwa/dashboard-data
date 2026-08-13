@@ -1090,8 +1090,9 @@ class DashboardController extends Controller
                       ->orWhereNull('visit_status');
                 })
                 ->where(function($q) {
-                    // Any patient with a recorded cons_time is considered consulted regardless of visit_status
-                    $q->whereNull('cons_time')
+                    // Emergency patients with a recorded cons_time are consulted even if visit_status != C
+                    $q->where('clinic_name', '!=', 'MLG EMERGENCY MEDICINE')
+                      ->orWhereNull('cons_time')
                       ->orWhere('cons_time', '');
                 });
 
