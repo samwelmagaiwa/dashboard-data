@@ -20,52 +20,61 @@ class DashboardController extends Controller
 {
     private function getRemoteApiAvailability(): bool
     {
-        $circuit = new \App\Services\CircuitBreaker('his_api');
+        $circuit  = new \App\Services\CircuitBreaker('his_api');
+        $cacheKey = 'dashboard_remote_api_health_v1';
+        $probeKey = 'dashboard_remote_api_probe_v1';
 
-        // If circuit is OPEN the API is known to be down — return immediately without
-        // touching the network. This is the fast path for the degraded state.
+        // Fast path: circuit OPEN and cooldown not elapsed — no network call needed.
         if ($circuit->getState() === \App\Services\CircuitBreaker::STATE_OPEN) {
             return false;
         }
 
-        $cacheKey  = 'dashboard_remote_api_health_v1';
-        $probeKey  = 'dashboard_remote_api_probe_v1';
-
-        // Return the last known value immediately so this HTTP request never blocks.
-        $known = Cache::get($cacheKey);
-
-        // Refresh the cached value at most once every 30 seconds.
-        // The probe runs inline (not in the queue) so it can never be blocked by
-        // stuck sync workers. A Cache::add lock prevents concurrent probe stampedes.
-        if ($known === null || !Cache::has($cacheKey . '_fresh')) {
-            if (Cache::add($probeKey, 1, 15)) {
-                try {
-                    $url = rtrim(config('dashboard.sync.base_url'), '/') . '/' . now()->format('Ymd');
-                    $response = Http::withBasicAuth(
-                            config('dashboard.sync.username'),
-                            config('dashboard.sync.password')
-                        )
-                        ->connectTimeout(3)
-                        ->timeout(6)
-                        ->get($url);
-
-                    $body   = trim((string) ($response->successful() ? $response->body() : ''));
-                    $result = $response->successful() && $body !== '' && json_last_error() === JSON_ERROR_NONE
-                              && json_decode($body, true) !== null;
-                } catch (\Throwable $e) {
-                    $result = false;
-                } finally {
-                    Cache::forget($probeKey);
-                }
-
-                Cache::put($cacheKey, $result, 120);
-                Cache::put($cacheKey . '_fresh', 1, 30);
-
-                return $result;
-            }
+        // Return cached result immediately if it is still fresh.
+        if (Cache::has($cacheKey . '_fresh')) {
+            return (bool) Cache::get($cacheKey, true);
         }
 
-        return $known ?? true;
+        // Probe the API inline (never in the queue — queue workers may be frozen).
+        // Cache::add acts as a distributed mutex so only one request probes at a time.
+        if (!Cache::add($probeKey, 1, 15)) {
+            // Another request is already probing — return last known value optimistically.
+            return (bool) Cache::get($cacheKey, true);
+        }
+
+        try {
+            $url = rtrim(config('dashboard.sync.base_url'), '/') . '/' . now()->format('Ymd');
+            $response = Http::withBasicAuth(
+                    config('dashboard.sync.username'),
+                    config('dashboard.sync.password')
+                )
+                ->connectTimeout(3)
+                ->timeout(6)
+                ->get($url);
+
+            $body   = trim((string) ($response->successful() ? $response->body() : ''));
+            $result = $response->successful()
+                      && $body !== ''
+                      && json_decode($body, true) !== null
+                      && json_last_error() === JSON_ERROR_NONE;
+        } catch (\Throwable $e) {
+            $result = false;
+        } finally {
+            Cache::forget($probeKey);
+        }
+
+        // Feed the probe result back into the circuit breaker so it transitions
+        // HALF_OPEN → CLOSED (recovered) or HALF_OPEN → OPEN (still down).
+        // This means recovery is detected by the dashboard poll, not only by sync jobs.
+        if ($result) {
+            $circuit->recordSuccess();
+        } else {
+            $circuit->recordFailure();
+        }
+
+        Cache::put($cacheKey, $result, 120);
+        Cache::put($cacheKey . '_fresh', 1, 30);
+
+        return $result;
     }
 
     private function rememberUnlessFresh(Request $request, string $cacheKey, int $ttl, callable $callback)
