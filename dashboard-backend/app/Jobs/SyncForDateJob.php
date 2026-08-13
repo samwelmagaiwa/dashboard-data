@@ -51,14 +51,14 @@ class SyncForDateJob implements ShouldQueue
             return;
         }
 
-        // If the circuit is open the remote API is known to be down.
-        // Release the worker immediately — don't block it for 30s waiting on a dead socket.
-        // The job will be retried automatically after the backoff; by then the circuit
-        // may have transitioned to HALF_OPEN and allowed a probe through.
+        // If the circuit is OPEN the remote API is known to be down.
+        // Complete the job cleanly (no retry, no release) so the batch can finish.
+        // Releasing instead would leave the batch permanently pending, blocking
+        // auto-sync from ever creating a new batch once the API recovers.
+        // The next auto-sync scheduler run will dispatch fresh jobs when appropriate.
         $circuit = new CircuitBreaker('his_api');
         if (!$circuit->isAvailable()) {
-            Log::info("[SyncForDateJob] Circuit OPEN — skipping {$this->date}, releasing worker.");
-            $this->release($circuit->remainingOpenSeconds());
+            Log::info("[SyncForDateJob] Circuit OPEN — skipping {$this->date} cleanly. API down for ~{$circuit->remainingOpenSeconds()}s.");
             return;
         }
 
