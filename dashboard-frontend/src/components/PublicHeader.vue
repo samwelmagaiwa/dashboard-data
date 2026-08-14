@@ -233,7 +233,7 @@ onMounted(() => {
             <AutoScrollControl />
           </CDropdownMenu>
         </CDropdown>
-        <CButton color="primary" @click="dashboard.isAuthenticated ? (modalVisible = true) : (loginPromptVisible = true)">Export</CButton>
+        <CButton color="primary" @click="loginPromptVisible = true">Export</CButton>
       </CHeaderNav>
 
       <CHeaderNav class="ms-auto d-flex align-items-center">
