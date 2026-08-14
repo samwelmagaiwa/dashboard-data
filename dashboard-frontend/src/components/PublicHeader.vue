@@ -31,6 +31,7 @@ import * as XLSX from 'xlsx'
 
 const gapsModalVisible = ref(false)
 const forceGapRepair = ref(false)
+const loginPromptVisible = ref(false)
 const dashboard = useDashboardStore()
 const { colorMode, setColorMode } = useColorModes('coreui-free-vue-admin-template-theme')
 const isRemoteOffline = computed(() => dashboard.remoteApiAvailable === false && dashboard.isOfflineUIReported)
@@ -232,7 +233,7 @@ onMounted(() => {
             <AutoScrollControl />
           </CDropdownMenu>
         </CDropdown>
-        <CButton color="primary" @click="modalVisible = true">Export</CButton>
+        <CButton color="primary" @click="dashboard.isAuthenticated ? (modalVisible = true) : (loginPromptVisible = true)">Export</CButton>
       </CHeaderNav>
 
       <CHeaderNav class="ms-auto d-flex align-items-center">
@@ -356,6 +357,28 @@ onMounted(() => {
           <CIcon v-if="!dashboard.isDetailedLoading" icon="cil-check" class="me-1" />
           <CSpinner v-else size="sm" class="me-1" />
           {{ dashboard.isDetailedLoading ? 'Loading Data...' : 'Yes, Export' }}
+        </CButton>
+      </CModalFooter>
+    </CModal>
+
+    <!-- Login Required Modal -->
+    <CModal :visible="loginPromptVisible" @close="() => (loginPromptVisible = false)" alignment="center">
+      <CModalHeader>
+        <CIcon icon="cil-lock-locked" class="text-warning me-2" />
+        Login Required
+      </CModalHeader>
+      <CModalBody class="text-center py-4">
+        <CIcon icon="cil-lock-locked" size="xxl" class="mb-3 text-warning" />
+        <p class="fs-5 mb-1">Export is available to authorized users only.</p>
+        <small class="text-muted">Please log in to download the dashboard data.</small>
+      </CModalBody>
+      <CModalFooter>
+        <CButton color="secondary" variant="outline" @click="loginPromptVisible = false">
+          Cancel
+        </CButton>
+        <CButton color="primary" component="a" href="/#/login" @click="loginPromptVisible = false">
+          <CIcon icon="cil-account-logout" class="me-1" />
+          Go to Login
         </CButton>
       </CModalFooter>
     </CModal>
