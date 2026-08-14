@@ -44,6 +44,12 @@ case "$COMMAND" in
     # Run this on the production server after CI has pushed new images.
     # Usage: ./deploy.sh deploy [tag]   (default tag: latest)
     compose pull
+    # Remove any leftover containers from previous project-name variants
+    # (e.g. clinicaldashboard-* vs dashboard-data-*) that would cause port conflicts.
+    docker ps -a --format '{{.ID}} {{.Names}}' \
+      | grep -E 'clinicaldashboard-|dashboard-data-|dashboard_' \
+      | awk '{print $1}' \
+      | xargs -r docker rm -f 2>/dev/null || true
     compose up -d --remove-orphans
     ;;
   up)
