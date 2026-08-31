@@ -77,7 +77,7 @@ const exportPendingToExcel = async () => {
     const rows = (resp?.data || []).map((p, i) => ({
       '#': i + 1,
       'MR Number':        p.mr_number     ?? '',
-      'Gender':           p.pat_gender    ?? '',
+      'Gender':           p.gender        ?? '',
       'Age':              p.pat_age       ?? '',
       'Visit No.':        p.visit_num     ?? '',
       'Visit Type':       p.visit_type    ?? '',

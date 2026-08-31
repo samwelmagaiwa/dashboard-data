@@ -1157,6 +1157,21 @@ class DashboardController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Invalid date range'], 422);
         }
 
+        // Exclude today — today's pending are "awaiting consultation", not "not consulted"
+        $today = date('Y-m-d');
+        if ($endDate >= $today) {
+            $endDate = date('Y-m-d', strtotime($today . ' -1 day'));
+        }
+
+        if ($startDate > $endDate) {
+            return response()->json([
+                'status' => 'success',
+                'message' => 'No past dates in selected range.',
+                'total' => 0,
+                'data' => [],
+            ]);
+        }
+
         $patients = Visit::where('visit_date', '>=', $startDate)
             ->where('visit_date', '<=', $endDate)
             ->where(function ($q) {
@@ -1170,7 +1185,7 @@ class DashboardController extends Controller
             })
             ->select([
                 'mr_number',
-                'pat_gender',
+                'gender',
                 'pat_age',
                 'visit_num',
                 'visit_type',
