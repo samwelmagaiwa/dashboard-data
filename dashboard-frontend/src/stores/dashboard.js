@@ -843,6 +843,14 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   }
 
+  const fetchPendingExport = async () => {
+    const { start_date, end_date } = calculateDateRange()
+    const response = await api.get('/dashboard/pending-patients/export', {
+      params: { start_date, end_date, _t: Date.now() },
+    })
+    return response.data
+  }
+
   const fetchDuplicateVisits = async () => {
     const { start_date, end_date } = calculateDateRange()
     try {
@@ -1265,6 +1273,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     jumpDate,
     resetToToday,
     fetchPendingPatients,
+    fetchPendingExport,
     fetchDuplicateVisits,
     fetchGenderRadarStats,
     fetchGaps,

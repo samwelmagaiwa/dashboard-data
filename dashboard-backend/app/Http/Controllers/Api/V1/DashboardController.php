@@ -1134,6 +1134,70 @@ class DashboardController extends Controller
     /**
      * Get list of duplicate visits captured during sync.
      */
+    /**
+     * Export all not-consulted patients as JSON for Excel generation.
+     * Requires authentication (auth:sanctum). Ordered by clinic then department.
+     */
+    public function exportPendingPatients(Request $request)
+    {
+        $startDate = $request->query('start_date');
+        $endDate   = $request->query('end_date');
+        $singleDate = $request->query('date');
+
+        if (!$startDate || !$endDate) {
+            $startDate = $singleDate ?? date('Y-m-d');
+            $endDate   = $startDate;
+        }
+
+        // Validate dates
+        try {
+            $startDate = \Carbon\Carbon::parse($startDate)->format('Y-m-d');
+            $endDate   = \Carbon\Carbon::parse($endDate)->format('Y-m-d');
+        } catch (\Exception $e) {
+            return response()->json(['status' => 'error', 'message' => 'Invalid date range'], 422);
+        }
+
+        $patients = Visit::where('visit_date', '>=', $startDate)
+            ->where('visit_date', '<=', $endDate)
+            ->where(function ($q) {
+                $q->where('visit_status', '!=', 'C')
+                  ->orWhereNull('visit_status');
+            })
+            ->where(function ($q) {
+                $q->where('clinic_name', '!=', 'MLG EMERGENCY MEDICINE')
+                  ->orWhereNull('cons_time')
+                  ->orWhere('cons_time', '');
+            })
+            ->select([
+                'mr_number',
+                'pat_gender',
+                'pat_age',
+                'visit_num',
+                'visit_type',
+                'visit_date',
+                'doct_code',
+                'bill_doct_name',
+                'cons_time',
+                'clinic_code',
+                'clinic_name',
+                'dept_code',
+                'dept_name',
+            ])
+            ->orderBy('clinic_name', 'asc')
+            ->orderBy('dept_name', 'asc')
+            ->orderBy('visit_date', 'asc')
+            ->orderBy('mr_number', 'asc')
+            ->get();
+
+        return response()->json([
+            'status'     => 'success',
+            'start_date' => $startDate,
+            'end_date'   => $endDate,
+            'total'      => $patients->count(),
+            'data'       => $patients,
+        ]);
+    }
+
     public function getDuplicateVisits(Request $request)
     {
         $startDate = $request->query('start_date');

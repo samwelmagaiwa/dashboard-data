@@ -58,6 +58,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
+    // Authenticated exports
+    Route::prefix('dashboard')->controller(DashboardController::class)->group(function () {
+        Route::get('/pending-patients/export', 'exportPendingPatients');
+    });
+
     // Profile Routes
     Route::prefix('profile')->group(function () {
         Route::get('/', [\App\Http\Controllers\Api\V1\ProfileController::class, 'show']);

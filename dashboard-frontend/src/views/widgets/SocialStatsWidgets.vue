@@ -9,15 +9,18 @@ import {
   cilXCircle,
   cilChartLine,
   cilHistory,
-  cilHospital, 
+  cilHospital,
   cilFile,
-  cilUser, 
+  cilUser,
   cilChevronBottom,
   cilChevronTop,
-  cilInfo,
+  cilPrint,
+  cilAccountLogout,
+  cilLockLocked,
 } from '@coreui/icons'
 import { useDashboardStore } from '@/stores/dashboard'
 import { ref, watch } from 'vue'
+import * as XLSX from 'xlsx'
 
 const dashboard = useDashboardStore()
 
@@ -52,6 +55,71 @@ const fetchPendingPatients = async () => {
   }
 }
 
+// --- Not-Consulted Export ---
+const showExportLoginPrompt = ref(false)
+const isExporting = ref(false)
+
+const handlePrinterClick = () => {
+  if (dashboard.isAuthenticated) {
+    exportPendingToExcel()
+  } else {
+    showExportLoginPrompt.value = true
+  }
+}
+
+const exportPendingToExcel = async () => {
+  isExporting.value = true
+  try {
+    const resp = await dashboard.fetchPendingExport()
+
+    const { start_date, end_date } = dashboard.calculateDateRange()
+
+    const rows = (resp?.data || []).map((p, i) => ({
+      '#': i + 1,
+      'MR Number':        p.mr_number     ?? '',
+      'Gender':           p.pat_gender    ?? '',
+      'Age':              p.pat_age       ?? '',
+      'Visit No.':        p.visit_num     ?? '',
+      'Visit Type':       p.visit_type    ?? '',
+      'Visit Date':       p.visit_date    ?? '',
+      'Doctor Code':      p.doct_code     ?? '',
+      'Doctor Name':      p.bill_doct_name ?? '',
+      'Cons. Time':       p.cons_time     ?? '',
+      'Clinic Code':      p.clinic_code   ?? '',
+      'Clinic Name':      p.clinic_name   ?? '',
+      'Dept. Code':       p.dept_code     ?? '',
+      'Department':       p.dept_name     ?? '',
+    }))
+
+    const ws = XLSX.utils.json_to_sheet(rows)
+
+    // Column widths
+    ws['!cols'] = [
+      { wch: 5 }, { wch: 14 }, { wch: 8 }, { wch: 6 }, { wch: 10 },
+      { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 24 }, { wch: 10 },
+      { wch: 12 }, { wch: 28 }, { wch: 10 }, { wch: 28 },
+    ]
+
+    // Bold header row
+    const range = XLSX.utils.decode_range(ws['!ref'])
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: 0, c: C })]
+      if (cell) cell.s = { font: { bold: true } }
+    }
+
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Not Consulted')
+
+    const filename = `not-consulted_${start_date}_to_${end_date}.xlsx`
+    XLSX.writeFile(wb, filename)
+  } catch (err) {
+    console.error('[Export] Failed:', err)
+    alert('Export failed. Please try again.')
+  } finally {
+    isExporting.value = false
+  }
+}
+
 // Refresh list if date range changes and list is open
 watch(
   () => [
@@ -73,6 +141,7 @@ watch(
 </script>
 
 <template>
+  <div>
   <div class="metrics-grid mb-0 px-0">
     <CRow
       :gutter="3"
@@ -253,8 +322,15 @@ watch(
           <!-- Decorative backgrounds for red theme -->
           <div v-if="!dashboard.isTodaySelected" class="decorative-curve-image"></div>
           <div v-if="!dashboard.isTodaySelected" class="vertical-dots"></div>
-          <div v-if="!dashboard.isTodaySelected" class="status-info-icon mirror-design">
-            <CIcon :icon="cilInfo" />
+          <div
+            v-if="!dashboard.isTodaySelected"
+            class="status-info-icon mirror-design"
+            style="cursor: pointer"
+            :title="dashboard.isAuthenticated ? 'Export Not Consulted to Excel' : 'Login to export'"
+            @click.stop="handlePrinterClick"
+          >
+            <CIcon v-if="!isExporting" :icon="cilPrint" />
+            <span v-else class="spinner-border spinner-border-sm" role="status"></span>
           </div>
 
           <div class="stat-card-header mb-1" @click="togglePendingList" style="cursor: pointer">
@@ -351,6 +427,28 @@ watch(
         </div>
       </CCol>
     </CRow>
+  </div>
+
+  <!-- Login Required for Export -->
+  <CModal :visible="showExportLoginPrompt" @close="showExportLoginPrompt = false" alignment="center">
+    <CModalHeader>
+      <CIcon :icon="cilLockLocked" class="text-warning me-2" />
+      Login Required
+    </CModalHeader>
+    <CModalBody class="text-center py-4">
+      <CIcon :icon="cilLockLocked" size="xxl" class="mb-3 text-warning" />
+      <p class="fs-5 mb-1">Export is available to authorized users only.</p>
+      <small class="text-muted">Please log in to download the Not Consulted patient list.</small>
+    </CModalBody>
+    <CModalFooter>
+      <CButton color="secondary" variant="outline" @click="showExportLoginPrompt = false">Cancel</CButton>
+      <CButton color="primary" component="a" href="/#/login" @click="showExportLoginPrompt = false">
+        <CIcon :icon="cilAccountLogout" class="me-1" />
+        Go to Login
+      </CButton>
+    </CModalFooter>
+  </CModal>
+
   </div>
 </template>
 
