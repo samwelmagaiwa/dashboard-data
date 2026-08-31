@@ -1172,7 +1172,9 @@ class DashboardController extends Controller
             ]);
         }
 
-        $patients = Visit::where('visit_date', '>=', $startDate)
+        // Use DB::table to avoid Eloquent model casts (e.g. visit_date Carbon object)
+        $patients = \Illuminate\Support\Facades\DB::table('visits')
+            ->where('visit_date', '>=', $startDate)
             ->where('visit_date', '<=', $endDate)
             ->where(function ($q) {
                 $q->where('visit_status', '!=', 'C')
