@@ -1,16 +1,60 @@
 <script setup>
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useDashboardStore } from '@/stores/dashboard'
+import * as XLSX from 'xlsx'
 import muhilogo from '@/assets/images/muhilogo.jpg'
 
 const router = useRouter()
+const route = useRoute()
 const dashboard = useDashboardStore()
 
 const email = ref('')
 const password = ref('')
 const isLoading = ref(false)
 const errorMessage = ref('')
+
+const triggerPendingExport = async () => {
+  try {
+    const resp = await dashboard.fetchPendingExport()
+    const { start_date, end_date } = dashboard.calculateDateRange()
+
+    const rows = (resp?.data || []).map((p, i) => ({
+      '#':              i + 1,
+      'MR Number':      p.mr_number      ?? '',
+      'Gender':         p.pat_gender     ?? '',
+      'Age':            p.pat_age        ?? '',
+      'Visit No.':      p.visit_num      ?? '',
+      'Visit Type':     p.visit_type     ?? '',
+      'Visit Date':     p.visit_date     ?? '',
+      'Doctor Code':    p.doct_code      ?? '',
+      'Doctor Name':    p.bill_doct_name ?? '',
+      'Cons. Time':     p.cons_time      ?? '',
+      'Clinic Code':    p.clinic_code    ?? '',
+      'Clinic Name':    p.clinic_name    ?? '',
+      'Dept. Code':     p.dept_code      ?? '',
+      'Department':     p.dept_name      ?? '',
+    }))
+
+    const ws = XLSX.utils.json_to_sheet(rows)
+    ws['!cols'] = [
+      { wch: 5 }, { wch: 14 }, { wch: 8 }, { wch: 6 }, { wch: 10 },
+      { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 24 }, { wch: 10 },
+      { wch: 12 }, { wch: 28 }, { wch: 10 }, { wch: 28 },
+    ]
+    const range = XLSX.utils.decode_range(ws['!ref'])
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: 0, c: C })]
+      if (cell) cell.s = { font: { bold: true } }
+    }
+
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Not Consulted')
+    XLSX.writeFile(wb, `not-consulted_${start_date}_to_${end_date}.xlsx`)
+  } catch (e) {
+    console.error('[Login Export]', e)
+  }
+}
 
 const handleLogin = async () => {
   isLoading.value = true
@@ -22,7 +66,16 @@ const handleLogin = async () => {
   })
 
   if (result.success) {
-    // Redirect based on role
+    const redirectParam = route.query.redirect
+
+    if (redirectParam === 'export-pending') {
+      // Trigger the download then return to the public dashboard
+      await triggerPendingExport()
+      router.push('/')
+      return
+    }
+
+    // Default redirect based on role
     const adminRoles = ['ED', 'DED', 'DICT']
     if (result.user && adminRoles.includes(result.user.role)) {
       router.push('/dashboard')

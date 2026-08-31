@@ -442,7 +442,7 @@ watch(
     </CModalBody>
     <CModalFooter>
       <CButton color="secondary" variant="outline" @click="showExportLoginPrompt = false">Cancel</CButton>
-      <CButton color="primary" component="a" href="/#/login" @click="showExportLoginPrompt = false">
+      <CButton color="primary" component="a" href="/#/login?redirect=export-pending" @click="showExportLoginPrompt = false">
         <CIcon :icon="cilAccountLogout" class="me-1" />
         Go to Login
       </CButton>
