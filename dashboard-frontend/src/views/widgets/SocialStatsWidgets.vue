@@ -83,7 +83,7 @@ const exportPendingToExcel = async () => {
       'Visit Type':       p.visit_type    ?? '',
       'Visit Date':       p.visit_date    ?? '',
       'Doctor Code':      p.doct_code     ?? '',
-      'Doctor Name':      p.bill_doct_name ?? '',
+      'Bill Doctor Name':  p.bill_doct_name ?? '',
       'Cons. Time':       p.cons_time     ?? '',
       'Clinic Code':      p.clinic_code   ?? '',
       'Clinic Name':      p.clinic_name   ?? '',
